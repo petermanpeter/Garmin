@@ -95,9 +95,6 @@ def render_content(tab):
             hovermode='closest'
         )
 
-        # fig.show()
-        # fig = px.scatter(df, x="sepal_width", y="sepal_length", color="species",
-        #                 title="Iris Sepal Width vs Length")
     elif tab == 'tab-2':
         fig = px.bar(df2, x='continent', y='pop', color='continent',
                      title="Gapminder 2007 Population by Continent")
