@@ -113,4 +113,5 @@ def render_content(tab):
     return dcc.Graph(figure=fig)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8050)
+   # app.run(debug=True, host='0.0.0.0', port=8050)
+    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=8050)
