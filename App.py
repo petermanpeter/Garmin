@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from scipy.signal import argrelextrema
+import os
 
 app = Dash(__name__)
 
@@ -113,5 +114,6 @@ def render_content(tab):
     return dcc.Graph(figure=fig)
 
 if __name__ == '__main__':
-   # app.run(debug=True, host='0.0.0.0', port=8050)
-    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=8050)
+    # app.run(debug=False, use_reloader=False, host='0.0.0.0', port=8050)
+    app.run_server(host='0.0.0.0', port=int(os.environ.get('PORT', 8501)))
+
