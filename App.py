@@ -1,3 +1,4 @@
+import streamlit as st
 from dash import Dash, dcc, html, Input, Output
 import pandas as pd
 import numpy as np
@@ -68,26 +69,30 @@ df3 = px.data.tips()
 df4 = px.data.carshare()
 df5 = px.data.medals_wide()
 
+#0 Streamlit
+tab = st.sidebar.selectbox('Select tab:', ['Weight', 'Distance per month', 'Pacing vs Cadence'])
+
 #0 Python Dash tab layout
-app.layout = html.Div([
-    dcc.Tabs(id='tabs-example', value='tab-1', children=[
-        dcc.Tab(label='Weight', value='tab-1'),
-        dcc.Tab(label='Distance per month', value='tab-2'),
-        dcc.Tab(label='Pacing vs Cadence', value='tab-3'),
-        dcc.Tab(label='Avg pacing by run type', value='tab-4'),
-        dcc.Tab(label='Medals Area', value='tab-5'),
-    ]),
-    html.Div(id='tabs-content-example')
-])
-@app.callback(
-    Output('tabs-content-example', 'children'),
-    Input('tabs-example', 'value')
-)
+#app.layout = html.Div([
+#    dcc.Tabs(id='tabs-example', value='tab-1', children=[
+#        dcc.Tab(label='Weight', value='tab-1'),
+#        dcc.Tab(label='Distance per month', value='tab-2'),
+#        dcc.Tab(label='Pacing vs Cadence', value='tab-3'),
+#        dcc.Tab(label='Avg pacing by run type', value='tab-4'),
+#        dcc.Tab(label='Medals Area', value='tab-5'),
+#    ]),
+#    html.Div(id='tabs-content-example')
+#])
+#@app.callback(
+#    Output('tabs-content-example', 'children'),
+#    Input('tabs-example', 'value')
+#)
 
 
 def render_content(tab):
-    if tab == 'tab-1':
+    if tab == 'Weight': #'tab-1':
 #2b Tab1 (Weight)
+        st.title('Weight vs Date')
         fig = go.Figure()
         # Main weight line
         fig.add_trace(go.Scatter(
@@ -126,17 +131,19 @@ def render_content(tab):
             yaxis_title="Weight (kg)",
             hovermode='closest'
         )
-
-    elif tab == 'tab-2':
+        st.plotly_chart(fig, use_container_width=True)
+    elif tab == 'Distance per month': #'tab-2':
 #3b Tab2 (Distance run by month)
+        st.title('Distance Traveled per Month')
         fig = px.bar(df_monthly, x='month', y='Distance',
                      title='Distance Traveled per Month',
                      labels={'month':'Month', 'Distance':'Distance (km)'})
         fig.update_layout(xaxis=dict(rangeslider=dict(visible=True), type='date'))
-        return dcc.Graph(figure=fig)
-    
-    elif tab == 'tab-3':
+#        return dcc.Graph(figure=fig)
+        st.plotly_chart(fig, use_container_width=True)
+    elif tab == 'Pacing vs Cadence': #'tab-3':
 #4b Tab3 (Pacing vs Cadence)
+        st.title('Pacing vs Cadence')
         color_map = {'5km': 'blue', '10km': 'red', '15km': 'green', '20km+': 'purple'}
         fig = go.Figure()
         for run in color_map.keys():
@@ -148,20 +155,21 @@ def render_content(tab):
             ))
         fig.update_layout(title='Pacing vs Cadence by Run Distance',
                           xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
-        return dcc.Graph(figure=fig)
-
-    elif tab == 'tab-4':
-        fig = px.line(df4, x='centroid_lon', y='centroid_lat',
-                      title="Carshare Locations")
-    elif tab == 'tab-5':
-        fig = px.area(df5, x='nation', y=['gold', 'silver', 'bronze'],
-                      title="Medal Counts by Country")
+#        return dcc.Graph(figure=fig)
+        st.plotly_chart(fig, use_container_width=True)
+#    elif tab == 'tab-4':
+#        fig = px.line(df4, x='centroid_lon', y='centroid_lat',
+#                      title="Carshare Locations")
+#        st.plotly_chart(fig, use_container_width=True)
+#    elif tab == 'tab-5':
+#        fig = px.area(df5, x='nation', y=['gold', 'silver', 'bronze'],
+#                      title="Medal Counts by Country")
+#        st.plotly_chart(fig, use_container_width=True)
     else:
         fig = {}
-
-    return dcc.Graph(figure=fig)
+        st.plotly_chart(fig, use_container_width=True)
+#     return dcc.Graph(figure=fig)
 
 if __name__ == '__main__':
     # app.run(debug=False, use_reloader=False, host='0.0.0.0', port=8050)
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8501)))
-
