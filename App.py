@@ -99,10 +99,37 @@ with tab1:  #Weight
 
 with tab2: #Distance per month
     st.title('Distance per Month')
-    fig = px.bar(df_monthly, x='month', y='Distance',
-                    title='Distance per Month',
-                    labels={'month':'Month', 'Distance':'Distance (km)'})
-    fig.update_layout(xaxis=dict(rangeslider=dict(visible=True), type='date'))
+     # Get min and max dates
+    min_date = df_monthly['month'].min().date()
+    max_date = df_monthly['month'].max().date()
+
+    # Range slider for selecting period
+    start_date, end_date = st.slider(
+        "Drag to select period:",
+        min_value=min_date,
+        max_value=max_date,
+        value=(min_date, max_date),
+        format="YYYY-MM"
+    )
+
+    # Filter by slider range
+    mask = (df_monthly['month'].dt.date >= start_date) & (df_monthly['month'].dt.date <= end_date)
+    df_filtered = df_monthly.loc[mask]
+
+    # Calculate stats
+    total_distance = df_filtered['Distance'].sum()
+    total_months = df_filtered['month'].nunique()
+
+    # Show dynamic metrics
+    st.metric("Total Distance (km)", f"{total_distance:.1f}")
+    st.metric("Number of Months", total_months)
+
+    # Plot filtered chart
+    fig = px.bar(
+        df_filtered, x='month', y='Distance',
+        title='Distance per Month',
+        labels={'month': 'Month', 'Distance': 'Distance (km)'}
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 with tab3: #Pacing vs Cadence

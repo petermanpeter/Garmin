@@ -6,6 +6,7 @@ pip install dash plotly pandas openpyxl streamlit
 
 # Run Comman
 python App.py
+streamlit run App.py
 
 # Create requirements.txt to hold the library
 pip freeze > requirements.txt  
