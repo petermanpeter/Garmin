@@ -8,6 +8,10 @@ import plotly.express as px
 from scipy.signal import argrelextrema
 import os
 
+#0 Target file to be imported
+df_weight = pd.read_excel('Weight_20250928.xlsx')
+df_G = pd.read_csv('Activities_Run_20250928.csv')
+
 def pace_to_float(t):
     if pd.isna(t) or str(t).strip() in ('', '--'):
         return np.nan
@@ -21,9 +25,7 @@ def pace_to_float(t):
         return np.nan
     return np.nan
 
-
 #1 Load the data
-df_weight = pd.read_excel('Weight_20250928.xlsx')
 df_weight['time'] = pd.to_datetime(df_weight['time'])
 
 # Find relative max/min indexes
@@ -31,7 +33,6 @@ n = 3 # window width for extrema
 rel_max = argrelextrema(df_weight['Body weight(kg)'].values, np.greater, order=n)
 rel_min = argrelextrema(df_weight['Body weight(kg)'].values, np.less, order=n)
 
-df_G = pd.read_csv('Activities_Run.csv')
 df_G['Date'] = pd.to_datetime(df_G['Date'], errors='coerce')
 df_G['Distance'] = pd.to_numeric(df_G['Distance'], errors='coerce')
 df_G['month'] = df_G['Date'].dt.to_period('M')
@@ -46,7 +47,8 @@ df_avg_pacing['month'] = df_avg_pacing['month'].dt.to_timestamp()
 df_G['run_type'] = pd.cut(df_G['Distance'], bins=[0, 7.5, 12.5, 17.5, np.inf], labels=['5km', '10km', '15km', '20km+'])
 
 #2 main program
-tab1, tab2, tab3 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence'])
+#tab1, tab2, tab3, tab4 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence', 'GarminConnect login'])
+tab1, tab2, tab3, tab4 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence', 'GarminConnect login'])
 
 with tab1:  #Weight
     st.title('Weight vs Date')
@@ -150,3 +152,7 @@ with tab3: #Pacing vs Cadence
     fig.update_layout(title='Pacing vs Cadence by Run Distance',
                         xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
     st.plotly_chart(fig, use_container_width=True)
+
+with tab4:  #GarminConnect login
+    st.title('GarminConnect login (under development)')
+    #main()
