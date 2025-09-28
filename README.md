@@ -12,7 +12,7 @@ streamlit run App.py
 pip freeze > requirements.txt  
 
 # Commit
-git add App.py Weight_20250907.xlsx Activities_Run.csv requirements.txt README.md
+git add App.py Weight_20250928.xlsx Activities_Run.csv requirements.txt README.md
 git commit -m "Add Python script, Excel data, and requirements"  
 git push  
 

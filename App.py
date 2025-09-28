@@ -9,22 +9,21 @@ from scipy.signal import argrelextrema
 import os
 
 def pace_to_float(t):
-    import numpy as np
     if pd.isna(t) or str(t).strip() in ('', '--'):
         return np.nan
     parts = str(t).strip().split(':')
     try:
         if len(parts) == 2:  # mm:ss
-            return int(parts) + int(parts) / 60
+            return int(parts[0]) + int(parts[1])/60
         elif len(parts) == 3:  # hh:mm:ss
-            return int(parts) * 60 + int(parts) + int(parts) / 60
+            return int(parts[0])*60 + int(parts[1]) + int(parts[2])/60
     except:
         return np.nan
     return np.nan
 
 
 #1 Load the data
-df_weight = pd.read_excel('Weight_20250907.xlsx')
+df_weight = pd.read_excel('Weight_20250928.xlsx')
 df_weight['time'] = pd.to_datetime(df_weight['time'])
 
 # Find relative max/min indexes
@@ -40,17 +39,11 @@ df_monthly = df_G.groupby('month')['Distance'].sum().reset_index()
 df_monthly['month'] = df_monthly['month'].dt.to_timestamp()
 
 df_G['Avg Pace'] = df_G['Avg Pace'].apply(pace_to_float)
+#df_G['Avg Run Cadence'] = df_G['Avg Run Cadence'].apply(pace_to_float)
 df_avg_pacing = df_G.groupby(['month'])['Avg Pace'].mean().reset_index()
 df_avg_pacing['month'] = df_avg_pacing['month'].dt.to_timestamp()
 
 df_G['run_type'] = pd.cut(df_G['Distance'], bins=[0, 7.5, 12.5, 17.5, np.inf], labels=['5km', '10km', '15km', '20km+'])
-
-#tab = st.sidebar.selectbox('Select tab:', ['Weight', 'Distance per month', 'Pacing vs Cadence'])
-
-#        dcc.Tab(label='Weight', value='tab-1'),
-#        dcc.Tab(label='Distance per month', value='tab-2'),
-#        dcc.Tab(label='Pacing vs Cadence', value='tab-3'),
-#        dcc.Tab(label='Avg pacing by run type', value='tab-4'),
 
 #2 main program
 tab1, tab2, tab3 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence'])
@@ -122,22 +115,33 @@ with tab2: #Distance per month
 
     # Show dynamic metrics
     st.metric("Total Distance (km)", f"{total_distance:.1f}")
-    st.metric("Number of Months", total_months)
+    years = total_months // 12
+    months = total_months % 12
+    if years > 0:
+        st.metric("Period", f"{years} year{'s' if years > 1 else ''} {months} month{'s' if months!= 1 else ''}")
+    else:
+        st.metric("Period", f"{months} month{'s' if months!= 1 else ''}")
+
 
     # Plot filtered chart
     fig = px.bar(
         df_filtered, x='month', y='Distance',
         title='Distance per Month',
-        labels={'month': 'Month', 'Distance': 'Distance (km)'}
+        labels={'month': 'Month', 'Distance': 'Distance (km)'},
+        text_auto='.0f'
     )
     st.plotly_chart(fig, use_container_width=True)
 
 with tab3: #Pacing vs Cadence
     st.title('Pacing vs Cadence')
+    #st.write(df_G[['run_type', 'Avg Pace', 'Avg Run Cadence']])
     color_map = {'5km': 'blue', '10km': 'red', '15km': 'green', '20km+': 'purple'}
     fig = go.Figure()
     for run in color_map.keys():
         df_sub = df_G[df_G['run_type'] == run]
+        #st.write(f"Run type {run} has {len(df_sub)} rows")
+        #st.write(f"Run type {run} has {len(df_sub)} rows")
+        #st.write(df_sub[['Avg Pace', 'Avg Run Cadence']])
         fig.add_trace(go.Scatter(
             x=df_sub['Avg Pace'], y=df_sub['Avg Run Cadence'], mode='markers',
             marker=dict(color=color_map[run]), name=run,
