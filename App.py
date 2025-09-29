@@ -39,8 +39,9 @@ df_G['month'] = df_G['Date'].dt.to_period('M')
 df_monthly = df_G.groupby('month')['Distance'].sum().reset_index()
 df_monthly['month'] = df_monthly['month'].dt.to_timestamp()
 
+df_G['Avg Pace ori'] = df_G['Avg Pace']
 df_G['Avg Pace'] = df_G['Avg Pace'].apply(pace_to_float)
-#df_G['Avg Run Cadence'] = df_G['Avg Run Cadence'].apply(pace_to_float)
+
 df_avg_pacing = df_G.groupby(['month'])['Avg Pace'].mean().reset_index()
 df_avg_pacing['month'] = df_avg_pacing['month'].dt.to_timestamp()
 
@@ -137,17 +138,32 @@ with tab2: #Distance per month
 with tab3: #Pacing vs Cadence
     st.title('Pacing vs Cadence')
     #st.write(df_G[['run_type', 'Avg Pace', 'Avg Run Cadence']])
+    run_types = ['5km', '10km', '15km', '20km+']
+    selected = st.multiselect('Select Run Types:', run_types, default=run_types)
     color_map = {'5km': 'blue', '10km': 'red', '15km': 'green', '20km+': 'purple'}
     fig = go.Figure()
-    for run in color_map.keys():
-        df_sub = df_G[df_G['run_type'] == run]
-        #st.write(f"Run type {run} has {len(df_sub)} rows")
+    df_filtered = df_G[df_G['run_type'].isin(selected)]
+    #for run in color_map.keys():
+    for run in selected:
+        #df_sub = df_G[df_G['run_type'] == run]
+        df_sub = df_filtered[df_filtered['run_type'] == run]
         #st.write(f"Run type {run} has {len(df_sub)} rows")
         #st.write(df_sub[['Avg Pace', 'Avg Run Cadence']])
+        #Title = df_sub[['Title']].values
+        #Time = df_sub[['Time']].values
+        #Distance = df_sub[['Distance']].values
         fig.add_trace(go.Scatter(
             x=df_sub['Avg Pace'], y=df_sub['Avg Run Cadence'], mode='markers',
             marker=dict(color=color_map[run]), name=run,
-            hovertemplate='Pacing: %{x:.2f} min/km<br>Cadence: %{y:.1f} spm<br>Distance: '+run
+            customdata=df_sub[['Title', 'Time', 'Distance','Avg Pace ori']].values,
+            hovertemplate=(
+            '%{customdata[0]}<br>Time: %{customdata[1]}<br>Distance: ('+run+') %{customdata[2]} km<br>'
+            'Pacing: %{customdata[3]} min/km<br>Cadence: %{y:.0f} spm'
+            )
+            #hovertemplate='Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm<br>Distance: '+run
+            #hovertemplate=Title_val +'<br>Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm<br>Distance: '+run
+            #hovertemplate=Title +'<br>Time: ' + Time +'<br>Distance: ('+run+') <br>Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm'
+            #hovertemplate=Title + '<br>Time: ' +Time+'<br>Distance: ('+run+')'+str(Distance)+' <br>Pacing: ' + str(Avg_Pace) + ' min/km<br>Cadence: %{y:.0f} spm'
         ))
     fig.update_layout(title='Pacing vs Cadence by Run Distance',
                         xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
