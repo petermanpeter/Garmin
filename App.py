@@ -53,24 +53,32 @@ tab1, tab2, tab3, tab4 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cad
 
 with tab1:  #Weight
     st.title('Weight vs Date')
+    unit = 'lb'
+    unit = st.radio("Choose unit:", ['lb', 'kg'], index=0)  # default kg
+    if unit == 'kg':
+        weight = df_weight['Body weight(kg)']
+        yaxis_title = "Weight (kg)"
+    else:
+        weight = df_weight['Body weight(kg)'] * 2.20462  # convert to lb
+        yaxis_title = "Weight (lb)"
     fig = go.Figure()
     # Main weight line
     fig.add_trace(go.Scatter(
-        x=df_weight['time'], y=df_weight['Body weight(kg)'], mode='lines+markers', name='Weight',
-        marker=dict(size=2, color='gray')
+        x=df_weight['time'], y=weight, mode='lines+markers', name='Weight',
+        marker=dict(size=1, color='gray')
     ))
     # Relative maxima
     fig.add_trace(go.Scatter(
-        x=df_weight['time'].iloc[rel_max], y=df_weight['Body weight(kg)'].iloc[rel_max], mode='markers', name='Rel max',
-        marker=dict(size=4, color='red', symbol='diamond'),
-        hovertemplate='<b>Max</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'
+        x=df_weight['time'].iloc[rel_max], y=weight.iloc[rel_max], mode='markers', name='Rel max',
+        marker=dict(size=2, color='red', symbol='diamond'),
+        hovertemplate='<b>Max</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'+unit
     ))
 
     # Relative minima
     fig.add_trace(go.Scatter(
-        x=df_weight['time'].iloc[rel_min], y=df_weight['Body weight(kg)'].iloc[rel_min], mode='markers', name='Rel min',
-        marker=dict(size=4, color='blue', symbol='star'),
-        hovertemplate='<b>Min</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'
+        x=df_weight['time'].iloc[rel_min], y=weight.iloc[rel_min], mode='markers', name='Rel min',
+        marker=dict(size=2, color='blue', symbol='star'),
+        hovertemplate='<b>Min</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'+unit
     ))
 
     fig.update_layout(
@@ -88,7 +96,7 @@ with tab1:  #Weight
             rangeslider=dict(visible=True),
             type="date"
         ),
-        yaxis_title="Weight (kg)",
+        yaxis_title=yaxis_title,
         hovermode='closest'
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -115,9 +123,10 @@ with tab2: #Distance per month
     # Calculate stats
     total_distance = df_filtered['Distance'].sum()
     total_months = df_filtered['month'].nunique()
+    df_filtered['Distance_rounded'] = df_filtered['Distance'].round(0)
 
     # Show dynamic metrics
-    st.metric("Total Distance (km)", f"{total_distance:.1f}")
+    st.metric("Total Distance (km)", f"{total_distance:,.1f}")
     years = total_months // 12
     months = total_months % 12
     if years > 0:
@@ -130,8 +139,8 @@ with tab2: #Distance per month
     fig = px.bar(
         df_filtered, x='month', y='Distance',
         title='Distance per Month',
-        labels={'month': 'Month', 'Distance': 'Distance (km)'},
-        text_auto='.0f'
+        labels={'month': 'Month', 'Distance_rounded': 'Distance (km)'},
+        text_auto='.0f',
     )
     st.plotly_chart(fig, use_container_width=True)
 
