@@ -6,11 +6,19 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy.signal import argrelextrema
+#from __future__ import print_function
 import os
+from io import BytesIO
+import base64
+import datetime
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 #0 Target file to be imported
-df_weight = pd.read_excel('Weight_20250928.xlsx')
-df_G = pd.read_csv('Activities_Run_20250928.csv')
+df_G = pd.read_csv('Activities_Run_20251202.csv')
+garmin_file = 'Weight_20251202.xlsx'
 
 def pace_to_float(t):
     if pd.isna(t) or str(t).strip() in ('', '--'):
@@ -25,8 +33,103 @@ def pace_to_float(t):
         return np.nan
     return np.nan
 
+# ---------------- CONFIG ----------------
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SEARCH_SENDER = "PICOOC"
+SEARCH_SUBJECT = "Health Data file"
+SAVE_DIR = "."
+# ----------------------------------------
+
+
+def gmail_authenticate():
+    """Authenticate Gmail using OAuth (requires credentials.json)."""
+    creds = None
+    if os.path.exists("token.json"):
+        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            #creds = flow.run_local_server(port=0)
+            #creds = flow.run_console()
+            auth_url, _ = flow.authorization_url(prompt='consent')
+            print("Please go to this URL: ", auth_url)
+            code = input("Enter the authorization code here: ")
+            creds = flow.fetch_token(code=code)
+        with open("token.json", "w") as token:
+            token.write(creds.to_json())
+    return build("gmail", "v1", credentials=creds)
+
+
+def search_latest_message(service, query):
+    """Find the most recent Gmail message matching a query."""
+    results = service.users().messages().list(userId="me", q=query, maxResults=1).execute()
+    messages = results.get("messages", [])
+    if not messages:
+        return None
+    msg_id = messages[0]["id"]
+    return service.users().messages().get(userId="me", id=msg_id).execute()
+
+
+def get_attachment_as_bytes(service, message):
+    """Return (filename, bytes, received_date_str) for the Excel attachment."""
+    headers = message.get("payload", {}).get("headers", [])
+    date_header = next((h["value"] for h in headers if h["name"] == "Date"), None)
+    if date_header:
+        try:
+            received_dt = datetime.datetime.strptime(date_header[:25], "%a, %d %b %Y %H:%M:%S")
+        except Exception:
+            received_dt = datetime.datetime.utcnow()
+    else:
+        received_dt = datetime.datetime.utcnow()
+
+    date_str = received_dt.strftime("%Y%m%d")
+
+    parts = message.get("payload", {}).get("parts", [])
+    if not parts:
+        parts = [message.get("payload", {})]
+
+    for part in parts:
+        filename = part.get("filename")
+        if not filename:
+            continue
+        if filename.lower().endswith(".xlsx"):
+            att_id = part["body"].get("attachmentId")
+            if not att_id:
+                continue
+            att = service.users().messages().attachments().get(
+                userId="me", messageId=message["id"], id=att_id
+            ).execute()
+            file_data = base64.urlsafe_b64decode(att["data"].encode("UTF-8"))
+            return filename, file_data, date_str
+    return None, None, date_str
+
+
 #1 Load the data
-df_weight['time'] = pd.to_datetime(df_weight['time'])
+#service = gmail_authenticate()
+#query = f'from:{SEARCH_SENDER} subject:"{SEARCH_SUBJECT}"'
+#message = search_latest_message(service, query)
+#if not message:
+#    print("❌ No matching PICOOC email found.")
+#filename, file_bytes, date_str = get_attachment_as_bytes(service, message)
+#if not file_bytes:
+#    print("❌ No .xlsx attachment found.")
+
+# Save locally
+#save_name = f"Weight_{date_str}.xlsx"
+#with open(save_name, "wb") as f:
+#    f.write(file_bytes)
+#print(f"✅ Saved attachment as {save_name}")
+
+# ---- NEW PART: Load into Pandas ----
+try:
+    df_weight = pd.read_excel(garmin_file)
+    #df_weight = pd.read_excel(BytesIO(file_bytes))
+    #print(f"✅ Loaded Excel into DataFrame ({len(df)} rows, {len(df.columns)} columns)")
+    #print(df.head())  # preview first few rows
+except Exception as e:
+    print("⚠️ Failed to read Excel:", e)
 
 # Find relative max/min indexes
 n = 3 # window width for extrema
@@ -55,6 +158,9 @@ with tab1:  #Weight
     st.title('Weight vs Date')
     unit = 'lb'
     unit = st.radio("Choose unit:", ['lb', 'kg'], index=0)  # default kg
+    #save_attachment(service, message)
+    #df_weight = pd.read_excel('Weight_20250928.xlsx')
+    df_weight['time'] = pd.to_datetime(df_weight['time'])
     if unit == 'kg':
         weight = df_weight['Body weight(kg)']
         yaxis_title = "Weight (kg)"
@@ -117,12 +223,16 @@ with tab2: #Distance per month
     )
 
     # Filter by slider range
-    mask = (df_monthly['month'].dt.date >= start_date) & (df_monthly['month'].dt.date <= end_date)
+    mask = (df_monthly['month'].dt.to_period('M') >= pd.Period(start_date, freq='M')) & (df_monthly['month'].dt.to_period('M') <= pd.Period(end_date, freq='M'))
+    #mask = (df_monthly['month'].dt.date >= start_date) & (df_monthly['month'].dt.date <= end_date)
     df_filtered = df_monthly.loc[mask]
 
     # Calculate stats
     total_distance = df_filtered['Distance'].sum()
-    total_months = df_filtered['month'].nunique()
+    filtered_yyyymm_min = pd.Period(start_date, freq='M')
+    filtered_yyyymm_max = pd.Period(end_date, freq='M')
+    total_months = (filtered_yyyymm_max.year - filtered_yyyymm_min.year) * 12 + (filtered_yyyymm_max.month - filtered_yyyymm_min.month) + 1
+    #total_months = df_filtered['month'].nunique()
     df_filtered['Distance_rounded'] = df_filtered['Distance'].round(0)
 
     # Show dynamic metrics

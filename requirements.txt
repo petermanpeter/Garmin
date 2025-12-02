@@ -1,8 +1,11 @@
+streamlit
 dash
-plotly
 pandas
 numpy
 matplotlib
+plotly
 scipy
-streamlit
+google-auth
+google-auth-oauthlib
+google-api-python-client
 openpyxl
