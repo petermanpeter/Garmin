@@ -15,6 +15,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from garminconnect import Garmin, GarminConnectAuthenticationError
+import json
 
 #0 Target file to be imported
 df_G = pd.read_csv('Activities_Run_20251202.csv')
@@ -290,4 +292,83 @@ with tab3: #Pacing vs Cadence
 
 with tab4:  #GarminConnect login
     st.title('GarminConnect login (under development)')
-    #main()
+    email = st.text_input("Garmin email")
+    password = st.text_input("Garmin password", type="password")
+
+    if st.button("Login & fetch runs"):
+        if not email or not password:
+            st.error("Please enter email and password")
+        else:
+            try:
+                api = Garmin(email, password)
+                api.login()
+
+                today = datetime.date.today()
+                start_date = today - datetime.timedelta(days=30)
+
+                # Get activities in last 30 days (Garmin API uses offset + limit)
+                # Simple approach: fetch first N recent activities then filter by date and type
+                raw_acts = api.get_activities(0, 200)  # adjust limit if needed
+
+                acts = []
+                for a in raw_acts:
+                    act_date = datetime.datetime.strptime(a["startTimeLocal"][:10], "%Y-%m-%d").date()
+                    if act_date < start_date:
+                        continue
+                    if a.get("activityType", {}).get("typeKey") not in ["running", "trail_running"]:
+                        continue
+                    acts.append(a)
+
+                if not acts:
+                    st.info("No run activities found in the last 30 days.")
+                else:
+                    df = pd.DataFrame(acts)
+                    st.write("Found runs:", len(df))
+                    df["distance_km"] = df["distance"] / 1000.0
+                    df["distance_km"] = df["distance_km"].round(2)
+                    st.dataframe(df[["activityId", "activityName", "startTimeLocal", "distance_km"]])
+
+                    # Select a run to show map
+                    sel_id = st.selectbox(
+                        "Select a run to show map",
+                        df["activityId"].tolist(),
+                        format_func=lambda x: f"{x} - " +
+                        df.loc[df["activityId"] == x, "activityName"].iloc[0]
+                    )
+
+                    if sel_id:
+                        details = api.get_activity_details(sel_id)
+                        #st.json(details.get("geoPolylineDTO", {}))
+                        # GPS samples are in detail data; path may differ per version
+                        # Common structure: "geoPolylineDTO" or "activityDetailMetrics"[...]
+                        geo = details.get("geoPolylineDTO")
+                        if not geo:
+                            st.warning("No GPS polyline available for this activity.")
+                        else:
+                            # Points as list of [lat, lon]
+                            pts = [(p["lat"], p["lon"]) for p in geo.get("polyline", [])]
+                            if not pts:
+                                st.warning("No GPS track points found.")
+                            else:
+                                gps_df = pd.DataFrame(pts, columns=["lat", "lon"])
+                                fig = px.line_mapbox(
+                                    gps_df,
+                                    lat="lat",
+                                    lon="lon",
+                                    zoom=12,
+                                    height=500,
+                                )
+                                fig.update_layout(
+                                    mapbox_style="open-street-map",
+                                        mapbox=dict(
+                                        zoom=13,
+                                        center=dict(lat=gps_df["lat"].mean(), lon=gps_df["lon"].mean()),
+                                    ),
+                                    margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+
+            except GarminConnectAuthenticationError:
+                st.error("Garmin authentication failed. Check email/password.")
+            except Exception as e:
+                st.error(f"Error while talking to Garmin: {e}")
