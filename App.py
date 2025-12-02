@@ -291,7 +291,7 @@ with tab3: #Pacing vs Cadence
     st.plotly_chart(fig, use_container_width=True)
 
 with tab4:  #GarminConnect login
-    st.title('GarminConnect login (under development)')
+    st.title('GarminConnect login')
     email = st.text_input("Garmin email")
     password = st.text_input("Garmin password", type="password")
 
@@ -304,7 +304,7 @@ with tab4:  #GarminConnect login
                 api.login()
 
                 today = datetime.date.today()
-                start_date = today - datetime.timedelta(days=30)
+                start_date = today - datetime.timedelta(days=365)
 
                 # Get activities in last 30 days (Garmin API uses offset + limit)
                 # Simple approach: fetch first N recent activities then filter by date and type
