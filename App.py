@@ -295,6 +295,12 @@ with tab4:  #GarminConnect login
     email = st.text_input("Garmin email")
     password = st.text_input("Garmin password", type="password")
 
+    # Initialize session state
+    if "gc_api" not in st.session_state:
+        st.session_state.gc_api = None
+    if "gc_df" not in st.session_state:
+        st.session_state.gc_df = None
+
     if st.button("Login & fetch runs"):
         if not email or not password:
             st.error("Please enter email and password")
@@ -302,13 +308,13 @@ with tab4:  #GarminConnect login
             try:
                 api = Garmin(email, password)
                 api.login()
-
+                st.session_state.gc_api = api  # save API
                 today = datetime.date.today()
                 start_date = today - datetime.timedelta(days=365)
 
                 # Get activities in last 30 days (Garmin API uses offset + limit)
                 # Simple approach: fetch first N recent activities then filter by date and type
-                raw_acts = api.get_activities(0, 200)  # adjust limit if needed
+                raw_acts = api.get_activities(0, 500)  # adjust limit if needed
 
                 acts = []
                 for a in raw_acts:
@@ -320,55 +326,83 @@ with tab4:  #GarminConnect login
                     acts.append(a)
 
                 if not acts:
-                    st.info("No run activities found in the last 30 days.")
+                    st.info("No run activities found in the last 365 days.")
                 else:
                     df = pd.DataFrame(acts)
                     st.write("Found runs:", len(df))
                     df["distance_km"] = df["distance"] / 1000.0
-                    df["distance_km"] = df["distance_km"].round(2)
-                    st.dataframe(df[["activityId", "activityName", "startTimeLocal", "distance_km"]])
-
-                    # Select a run to show map
-                    sel_id = st.selectbox(
-                        "Select a run to show map",
-                        df["activityId"].tolist(),
-                        format_func=lambda x: f"{x} - " +
-                        df.loc[df["activityId"] == x, "activityName"].iloc[0]
-                    )
-
-                    if sel_id:
-                        details = api.get_activity_details(sel_id)
-                        #st.json(details.get("geoPolylineDTO", {}))
-                        # GPS samples are in detail data; path may differ per version
-                        # Common structure: "geoPolylineDTO" or "activityDetailMetrics"[...]
-                        geo = details.get("geoPolylineDTO")
-                        if not geo:
-                            st.warning("No GPS polyline available for this activity.")
-                        else:
-                            # Points as list of [lat, lon]
-                            pts = [(p["lat"], p["lon"]) for p in geo.get("polyline", [])]
-                            if not pts:
-                                st.warning("No GPS track points found.")
-                            else:
-                                gps_df = pd.DataFrame(pts, columns=["lat", "lon"])
-                                fig = px.line_mapbox(
-                                    gps_df,
-                                    lat="lat",
-                                    lon="lon",
-                                    zoom=12,
-                                    height=500,
-                                )
-                                fig.update_layout(
-                                    mapbox_style="open-street-map",
-                                        mapbox=dict(
-                                        zoom=13,
-                                        center=dict(lat=gps_df["lat"].mean(), lon=gps_df["lon"].mean()),
-                                    ),
-                                    margin={"r": 0, "t": 0, "l": 0, "b": 0},
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-
+                    df["distance_km"] = df["distance_km"].round(1)
+                    st.session_state.gc_df = df  # save dataframe
             except GarminConnectAuthenticationError:
                 st.error("Garmin authentication failed. Check email/password.")
             except Exception as e:
                 st.error(f"Error while talking to Garmin: {e}")
+
+    # Always render UI if we have data
+    df = st.session_state.gc_df
+    api = st.session_state.gc_api
+
+    if df is not None:
+        st.write("Found runs:", len(df))
+        st.dataframe(df[["activityId", "activityName", "startTimeLocal", "distance_km"]])
+
+        sel_id = st.selectbox(
+            "Select a run to show map",
+            df["activityId"].tolist(),
+            format_func=lambda x: f"{x} - " +
+                                  df.loc[df["activityId"] == x, "activityName"].iloc[0],
+            key="run_select",
+        )
+        #st.write("API is", type(api), "logged in?" , api is not None)
+
+        if sel_id and api is not None:
+            try:
+                details = api.get_activity_details(sel_id)
+                # Inspect once to understand the structure
+                # st.json(details)  # or:
+                # st.json(details.get("geoPolylineDTO", {}))
+
+                geo = details.get("geoPolylineDTO")
+                if not geo:
+                    st.warning("No GPS polyline available for this activity.")
+                else:
+                    poly = geo.get("polyline", [])
+                    if not isinstance(poly, list):
+                        st.error(f"Unexpected polyline format: {type(poly)}")
+                    else:
+                        pts = []
+                        for p in poly:
+                            # case 1: dict with lat/lon keys
+                            if isinstance(p, dict) and "lat" in p and "lon" in p:
+                                pts.append((p["lat"], p["lon"]))
+                            # case 2: list/tuple [lat, lon]
+                            elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                                pts.append((p[0], p[1]))
+
+                        if not pts:
+                            st.warning("No GPS track points found.")
+                        else:
+                            gps_df = pd.DataFrame(pts, columns=["lat", "lon"])
+                            fig = px.line_mapbox(
+                                gps_df,
+                                lat="lat",
+                                lon="lon",
+                                zoom=16,
+                                height=500,
+                            )
+                            fig.update_traces(line_color="red", line_width=2)
+                            fig.update_layout(
+                                mapbox_style="open-street-map",
+                                mapbox=dict(
+                                    zoom=16,
+                                    center=dict(
+                                        lat=gps_df["lat"].mean(),
+                                        lon=gps_df["lon"].mean(),
+                                    ),
+                                ),
+                                margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error while talking to Garmin: {e!r} ({type(e)})")
