@@ -15,6 +15,6 @@ pip freeze > requirements.txt
 
 # Commit
 git add App.py Weight_20251221.xlsx requirements.txt README.md
-git commit -m ""  
+git commit -m "update"  
 git push  
 
