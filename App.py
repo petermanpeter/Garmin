@@ -222,7 +222,7 @@ with tab4:  #GarminConnect login
     if "gc_df" not in st.session_state:
         st.session_state.gc_df = None
 
-    if st.button("Login & fetch run details"):
+    if st.button("Login"):
         if not email or not password:
             st.error("Please enter email and password")
         else:
@@ -235,14 +235,22 @@ with tab4:  #GarminConnect login
 
                 # Get activities in last 30 days (Garmin API uses offset + limit)
                 # Simple approach: fetch first N recent activities then filter by date and type
-                raw_acts = api.get_activities(0, 1000)  # adjust limit if needed
-
+                #raw_acts = api.get_activities(0, 1000)  # adjust limit if needed
+                raw_acts = []
+                start = 0
+                page_size = 1000
+                while True:
+                    batch = api.get_activities(start, page_size)
+                    if not batch:
+                        break
+                    raw_acts.extend(batch)
+                    start += page_size
                 acts = []
                 for a in raw_acts:
                     act_date = datetime.datetime.strptime(a["startTimeLocal"][:10], "%Y-%m-%d").date()
                     if act_date < start_date:
                         continue
-                    if a.get("activityType", {}).get("typeKey") not in ["running", "trail_running"]:
+                    if a.get("activityType", {}).get("typeKey") not in ["running", "trail_running", "treadmill_running"]:
                         continue
                     acts.append(a)
 
@@ -250,269 +258,288 @@ with tab4:  #GarminConnect login
                     st.info("No run activities found in the last 365 days.")
                 else:
                     df = pd.DataFrame(acts)
-                    st.subheader("Raw activities (first 10 rows)")
+                    #st.subheader("Raw activities (first 10 rows)")
                     #st.write("Columns:", list(df.columns))
-                    st.dataframe(df.head(10))
+                    #st.dataframe(df.head(10))
 
                     st.write("Found runs:", len(df))
                     df["distance_km"] = df["distance"] / 1000.0
                     df["distance_km"] = df["distance_km"].round(1)
                     st.session_state.gc_df = df  # save dataframe
 
-                    GC_tab1, GC_tab2, GC_tab3, GC_tab4 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence', 'Map'])
-
-                    with GC_tab1:  #Weight
-                        st.title('Weight vs Date')
-                        unit = 'lb'
-                        unit = st.radio("Choose unit:", ['lb', 'kg'], index=0)  # default kg
-                        #save_attachment(service, message)
-                        #df_weight = pd.read_excel('Weight_20250928.xlsx')
-                        df_weight['time'] = pd.to_datetime(df_weight['time'])
-                        if unit == 'kg':
-                            weight = df_weight['Body weight(kg)']
-                            yaxis_title = "Weight (kg)"
-                        else:
-                            weight = df_weight['Body weight(kg)'] * 2.20462  # convert to lb
-                            yaxis_title = "Weight (lb)"
-                        fig = go.Figure()
-                        # Main weight line
-                        fig.add_trace(go.Scatter(
-                            x=df_weight['time'], y=weight, mode='lines+markers', name='Weight',
-                            marker=dict(size=1, color='gray')
-                        ))
-                        # Relative maxima
-                        fig.add_trace(go.Scatter(
-                            x=df_weight['time'].iloc[rel_max], y=weight.iloc[rel_max], mode='markers', name='Rel max',
-                            marker=dict(size=2, color='red', symbol='diamond'),
-                            hovertemplate='<b>Max</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'+unit
-                        ))
-
-                        # Relative minima
-                        fig.add_trace(go.Scatter(
-                            x=df_weight['time'].iloc[rel_min], y=weight.iloc[rel_min], mode='markers', name='Rel min',
-                            marker=dict(size=2, color='blue', symbol='star'),
-                            hovertemplate='<b>Min</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'+unit
-                        ))
-
-                        fig.update_layout(
-                            title="Weight vs Date with Range Slider and Clickable Max/Min",
-                            xaxis=dict(
-                                rangeselector=dict(
-                                    buttons=list([
-                                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                                        dict(count=3, label="3m", step="month", stepmode="backward"),
-                                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                                        dict(count=12, label="12m", step="month", stepmode="backward"),
-                                        dict(step="all")
-                                    ])
-                                ),
-                                rangeslider=dict(visible=True),
-                                type="date"
-                            ),
-                            yaxis_title=yaxis_title,
-                            hovermode='closest'
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    with GC_tab2: #Distance per month
-                        st.title('Distance per Month')
-                        #Testing
-                        df_G = st.session_state.gc_df.copy()
-                        df_G['Date'] = pd.to_datetime(df_G['startTimeLocal'], errors='coerce')
-                        df_G['Distance'] = df_G['distance'] / 1000.0
-                        
-                        #df_G['Date'] = pd.to_datetime(df_G['Date'], errors='coerce')
-                        #df_G['Distance'] = pd.to_numeric(df_G['Distance'], errors='coerce')
-                        #Testing 
-                        #df_G = []
-                        #df_G['Date'] = df['startTimeLocal']
-                        #df_G['Distance'] = df['distance_km']    
-                        #
-                        
-                        df_G['month'] = df_G['Date'].dt.to_period('M')
-                        df_monthly = df_G.groupby('month')['Distance'].sum().reset_index()
-                        df_monthly['month'] = df_monthly['month'].dt.to_timestamp()
-
-                        df_G['Avg Pace'] = df_G['duration'] / 60 / df_G['Distance']
-                        #
-                        df_G['Avg Pace ori'] = df_G['Avg Pace']
-                        df_G['Avg Pace'] = df_G['Avg Pace'].apply(pace_to_float)
-
-                        df_avg_pacing = df_G.groupby(['month'])['Avg Pace'].mean().reset_index()
-                        df_avg_pacing['month'] = df_avg_pacing['month'].dt.to_timestamp()
-
-                        df_G['run_type'] = pd.cut(df_G['Distance'], bins=[0, 7.5, 12.5, 17.5, np.inf], labels=['5km', '10km', '15km', '20km+'])
-
-                        # Get min and max dates
-                        min_date = df_monthly['month'].min().date()
-                        max_date = df_monthly['month'].max().date()
-
-                        # Range slider for selecting period
-                        start_date, end_date = st.slider(
-                            "Drag to select period:",
-                            min_value=min_date,
-                            max_value=max_date,
-                            value=(min_date, max_date),
-                            format="YYYY-MM"
-                        )
-
-                        # Filter by slider range
-                        mask = (df_monthly['month'].dt.to_period('M') >= pd.Period(start_date, freq='M')) & (df_monthly['month'].dt.to_period('M') <= pd.Period(end_date, freq='M'))
-                        #mask = (df_monthly['month'].dt.date >= start_date) & (df_monthly['month'].dt.date <= end_date)
-                        df_filtered = df_monthly.loc[mask]
-
-                        # Calculate stats
-                        total_distance = df_filtered['Distance'].sum()
-                        filtered_yyyymm_min = pd.Period(start_date, freq='M')
-                        filtered_yyyymm_max = pd.Period(end_date, freq='M')
-                        total_months = (filtered_yyyymm_max.year - filtered_yyyymm_min.year) * 12 + (filtered_yyyymm_max.month - filtered_yyyymm_min.month) + 1
-                        #total_months = df_filtered['month'].nunique()
-                        df_filtered['Distance_rounded'] = df_filtered['Distance'].round(0)
-
-                        # Show dynamic metrics
-                        st.metric("Total Distance (km)", f"{total_distance:,.1f}")
-                        years = total_months // 12
-                        months = total_months % 12
-                        if years > 0:
-                            st.metric("Period", f"{years} year{'s' if years > 1 else ''} {months} month{'s' if months!= 1 else ''}")
-                        else:
-                            st.metric("Period", f"{months} month{'s' if months!= 1 else ''}")
-
-
-                        # Plot filtered chart
-                        fig = px.bar(
-                            df_filtered, x='month', y='Distance',
-                            title='Distance per Month',
-                            labels={'month': 'Month', 'Distance_rounded': 'Distance (km)'},
-                            text_auto='.0f',
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    with GC_tab3: #Pacing vs Cadence
-                        st.title('Pacing vs Cadence')
-                        #st.write(df_G[['run_type', 'Avg Pace', 'Avg Run Cadence']])
-                        run_types = ['5km', '10km', '15km', '20km+']
-                        selected = st.multiselect('Select Run Types:', run_types, default=run_types)
-                        color_map = {'5km': 'blue', '10km': 'red', '15km': 'green', '20km+': 'purple'}
-                        fig = go.Figure()
-                        df_filtered = df_G[df_G['run_type'].isin(selected)]
-                        #for run in color_map.keys():
-                        for run in selected:
-                            #df_sub = df_G[df_G['run_type'] == run]
-                            df_sub = df_filtered[df_filtered['run_type'] == run]
-                            #st.write(f"Run type {run} has {len(df_sub)} rows")
-                            #st.write(df_sub[['Avg Pace', 'Avg Run Cadence']])
-                            #Title = df_sub[['Title']].values
-                            #Time = df_sub[['Time']].values
-                            #Distance = df_sub[['Distance']].values
-                            fig.add_trace(go.Scatter(
-                                x=df_sub['Avg Pace'], y=df_sub['averageRunningCadenceInStepsPerMinute'], mode='markers',
-                                marker=dict(color=color_map[run]), name=run,
-                                customdata=df_sub[['activityName', 'startTimeLocal', 'Distance','Avg Pace ori']].values,
-                                hovertemplate=(
-                                '%{customdata[0]}<br>Time: %{customdata[1]}<br>Distance: ('+run+') %{customdata[2]} km<br>'
-                                'Pacing: %{customdata[3]} min/km<br>Cadence: %{y:.0f} spm'
-                                )
-                                #hovertemplate='Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm<br>Distance: '+run
-                                #hovertemplate=Title_val +'<br>Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm<br>Distance: '+run
-                                #hovertemplate=Title +'<br>Time: ' + Time +'<br>Distance: ('+run+') <br>Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm'
-                                #hovertemplate=Title + '<br>Time: ' +Time+'<br>Distance: ('+run+')'+str(Distance)+' <br>Pacing: ' + str(Avg_Pace) + ' min/km<br>Cadence: %{y:.0f} spm'
-                            ))
-                        fig.update_layout(title='Pacing vs Cadence by Run Distance',
-                                            xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    with GC_tab4: #Map
-                        if df is not None:
-                            st.write("Found runs:", len(df))
-                            st.dataframe(df[["activityId", "activityName", "startTimeLocal", "distance_km"]])
-
-                            sel_id = st.selectbox(
-                                "Select a run to show map",
-                                df["activityId"].tolist(),
-                                format_func=lambda x: f"{x} - " +
-                                                    df.loc[df["activityId"] == x, "activityName"].iloc[0],
-                                key="run_select",
-                            )
-                            #st.write("API is", type(api), "logged in?" , api is not None)
-
-                            if sel_id and api is not None:
-                                try:
-                                    details = api.get_activity_details(sel_id)
-                                    # Inspect once to understand the structure
-                                    # st.json(details)  # or:
-                                    # st.json(details.get("geoPolylineDTO", {}))
-
-                                    geo = details.get("geoPolylineDTO")
-                                    if not geo:
-                                        st.warning("No GPS polyline available for this activity.")
-                                    else:
-                                        poly = geo.get("polyline", [])
-                                        if not isinstance(poly, list):
-                                            st.error(f"Unexpected polyline format: {type(poly)}")
-                                        else:
-                                            pts = []
-                                            for p in poly:
-                                                # case 1: dict with lat/lon keys
-                                                if isinstance(p, dict) and "lat" in p and "lon" in p:
-                                                    pts.append((p["lat"], p["lon"]))
-                                                # case 2: list/tuple [lat, lon]
-                                                elif isinstance(p, (list, tuple)) and len(p) >= 2:
-                                                    pts.append((p[0], p[1]))
-
-                                            if not pts:
-                                                st.warning("No GPS track points found.")
-                                            else:
-                                                gps_df = pd.DataFrame(pts, columns=["lat", "lon"])
-                                                fig = px.line_mapbox(
-                                                    gps_df,
-                                                    lat="lat",
-                                                    lon="lon",
-                                                    zoom=guess_zoom_from_bounds(gps_df),
-                                                    height=500,
-                                                )
-                                                fig.update_traces(line_color="red", line_width=2)
-                                                
-                                                # Add km markers
-                                                km_df = add_km_markers(gps_df)
-                                                if not km_df.empty:
-                                                    fig.add_scattermapbox(
-                                                        lat=km_df["lat"],
-                                                        lon=km_df["lon"],
-                                                        mode="markers+text",
-                                                        marker=dict(
-                                                            size=18,
-                                                            color="white",
-                                                            opacity=0.9,
-                                                        ),
-                                                        text=km_df["km"].astype(str),
-                                                        textposition="middle center",
-                                                        textfont=dict(color="black", size=10),
-                                                        name="km markers",
-                                                        showlegend=False,
-                                                    )
-                                                
-                                                fig.update_layout(
-                                                    mapbox_style="open-street-map",
-                                                    mapbox=dict(
-                                                        zoom=guess_zoom_from_bounds(gps_df),
-                                                        center=dict(
-                                                            lat=gps_df["lat"].mean(),
-                                                            lon=gps_df["lon"].mean(),
-                                                        ),
-                                                    ),
-                                                    margin={"r": 0, "t": 0, "l": 0, "b": 0},
-                                                )
-                                                st.plotly_chart(fig, use_container_width=True)
-
-                                except Exception as e:
-                                    st.error(f"Error while talking to Garmin: {e!r} ({type(e)})")
-                                    
+    
             except GarminConnectAuthenticationError:
                 st.error("Garmin authentication failed. Check email/password.")
             except Exception as e:
                 st.error(f"Error while talking to Garmin: {e}")
 
-    # Always render UI if we have data
-    df = st.session_state.gc_df
-    api = st.session_state.gc_api
+# Always render UI if we have data
+#df = st.session_state.gc_df
+#api = st.session_state.gc_api
+# Safely get session state data
+runs_df = st.session_state.get("gc_df")  # None if not set
+api = st.session_state.get("gc_api")     # None if not set
+
+# Early return if no data yet
+if runs_df is None:
+    st.info("👆 Please log in first to see your Garmin runs")
+    st.stop()  # Stop script execution here
+
+GC_tab1, GC_tab2, GC_tab3, GC_tab4 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence', 'Map'])
+
+with GC_tab1:  #Weight
+    st.title('Weight vs Date')
+    unit = 'lb'
+    unit = st.radio("Choose unit:", ['lb', 'kg'], index=0, key="weight_unit")  # default kg
+    #save_attachment(service, message)
+    #df_weight = pd.read_excel('Weight_20250928.xlsx')
+    df_weight['time'] = pd.to_datetime(df_weight['time'])
+    if unit == 'kg':
+        weight = df_weight['Body weight(kg)']
+        yaxis_title = "Weight (kg)"
+    else:
+        weight = df_weight['Body weight(kg)'] * 2.20462  # convert to lb
+        yaxis_title = "Weight (lb)"
+    fig = go.Figure()
+    # Main weight line
+    fig.add_trace(go.Scatter(
+        x=df_weight['time'], y=weight, mode='lines+markers', name='Weight',
+        marker=dict(size=1, color='gray')
+    ))
+    # Relative maxima
+    fig.add_trace(go.Scatter(
+        x=df_weight['time'].iloc[rel_max], y=weight.iloc[rel_max], mode='markers', name='Rel max',
+        marker=dict(size=2, color='red', symbol='diamond'),
+        hovertemplate='<b>Max</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'+unit
+    ))
+
+    # Relative minima
+    fig.add_trace(go.Scatter(
+        x=df_weight['time'].iloc[rel_min], y=weight.iloc[rel_min], mode='markers', name='Rel min',
+        marker=dict(size=2, color='blue', symbol='star'),
+        hovertemplate='<b>Min</b><br>Date: %{x|%Y-%m-%d}<br>Weight: %{y:.1f}'+unit
+    ))
+
+    fig.update_layout(
+        title="Weight vs Date with Range Slider and Clickable Max/Min",
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(count=12, label="12m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ])
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        yaxis_title=yaxis_title,
+        hovermode='closest'
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+with GC_tab2: #Distance per month
+    st.title('Distance per Month')
+    #Testing
+    df_G = runs_df.copy()
+    #df_G = st.session_state.gc_df.copy()
+    df_G['Date'] = pd.to_datetime(df_G['startTimeLocal'], errors='coerce')
+    df_G['Distance'] = df_G['distance'] / 1000.0
+    
+    #df_G['Date'] = pd.to_datetime(df_G['Date'], errors='coerce')
+    #df_G['Distance'] = pd.to_numeric(df_G['Distance'], errors='coerce')
+    #Testing 
+    #df_G = []
+    #df_G['Date'] = df['startTimeLocal']
+    #df_G['Distance'] = df['distance_km']    
+    #
+    
+    df_G['month'] = df_G['Date'].dt.to_period('M')
+    df_monthly = df_G.groupby('month')['Distance'].sum().reset_index()
+    df_monthly['month'] = df_monthly['month'].dt.to_timestamp()
+
+    df_G['Avg Pace'] = df_G['duration'] / 60 / df_G['Distance']
+    #
+    df_G['Avg Pace ori'] = df_G['Avg Pace']
+    df_G['Avg Pace'] = df_G['Avg Pace'].apply(pace_to_float)
+
+    df_avg_pacing = df_G.groupby(['month'])['Avg Pace'].mean().reset_index()
+    df_avg_pacing['month'] = df_avg_pacing['month'].dt.to_timestamp()
+
+    df_G['run_type'] = pd.cut(df_G['Distance'], bins=[0, 7.5, 12.5, 17.5, np.inf], labels=['5km', '10km', '15km', '20km+'])
+
+    # Get min and max dates
+    min_date = df_monthly['month'].min().date()
+    max_date = df_monthly['month'].max().date()
+
+    # Range slider for selecting period
+    start_date, end_date = st.slider(
+        "Drag to select period:",
+        min_value=min_date,
+        max_value=max_date,
+        value=(min_date, max_date),
+        format="YYYY-MM"
+    )
+
+    # Filter by slider range
+    mask = (df_monthly['month'].dt.to_period('M') >= pd.Period(start_date, freq='M')) & (df_monthly['month'].dt.to_period('M') <= pd.Period(end_date, freq='M'))
+    #mask = (df_monthly['month'].dt.date >= start_date) & (df_monthly['month'].dt.date <= end_date)
+    df_filtered = df_monthly.loc[mask]
+
+    # Calculate stats
+    total_distance = df_filtered['Distance'].sum()
+    filtered_yyyymm_min = pd.Period(start_date, freq='M')
+    filtered_yyyymm_max = pd.Period(end_date, freq='M')
+    total_months = (filtered_yyyymm_max.year - filtered_yyyymm_min.year) * 12 + (filtered_yyyymm_max.month - filtered_yyyymm_min.month) + 1
+    #total_months = df_filtered['month'].nunique()
+    df_filtered['Distance_rounded'] = df_filtered['Distance'].round(0)
+
+    # Show dynamic metrics
+    st.metric("Total Distance (km)", f"{total_distance:,.1f}")
+    years = total_months // 12
+    months = total_months % 12
+    if years > 0:
+        st.metric("Period", f"{years} year{'s' if years > 1 else ''} {months} month{'s' if months!= 1 else ''}")
+    else:
+        st.metric("Period", f"{months} month{'s' if months!= 1 else ''}")
+
+
+    # Plot filtered chart
+    fig = px.bar(
+        df_filtered, x='month', y='Distance',
+        title='Distance per Month',
+        labels={'month': 'Month', 'Distance_rounded': 'Distance (km)'},
+        text_auto='.0f',
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+with GC_tab3: #Pacing vs Cadence
+    st.title('Pacing vs Cadence')
+    df_G['Avg Pace'] = df_G['duration'] / 60 / df_G['Distance']
+    st.write(df_G[['run_type', 'Avg Pace', 'averageRunningCadenceInStepsPerMinute']])
+    if runs_df is None:
+        st.info("No run data available")
+        st.stop()
+    #df_G = runs_df.copy()
+    #
+    run_types = ['5km', '10km', '15km', '20km+']
+    selected = st.multiselect('Select Run Types:', run_types, default=run_types)
+    color_map = {'5km': 'blue', '10km': 'red', '15km': 'green', '20km+': 'purple'}
+    fig = go.Figure()
+    df_filtered = df_G[
+        (df_G['run_type'].isin(selected)) & 
+        (df_G['Avg Pace'] <= 30)
+    ].copy()
+    #for run in color_map.keys():
+    for run in selected:
+        #df_sub = df_G[df_G['run_type'] == run]
+        df_sub = df_filtered[df_filtered['run_type'] == run]
+        #st.write(f"Run type {run} has {len(df_sub)} rows")
+        #st.write(df_sub[['Avg Pace', 'Avg Run Cadence']])
+        #Title = df_sub[['Title']].values
+        #Time = df_sub[['Time']].values
+        #Distance = df_sub[['Distance']].values
+        fig.add_trace(go.Scatter(
+            x=df_sub['Avg Pace'], y=df_sub['averageRunningCadenceInStepsPerMinute'], mode='markers',
+            marker=dict(color=color_map[run]), name=run,
+            customdata=df_sub[['activityName', 'startTimeLocal', 'Distance','Avg Pace ori']].values,
+            hovertemplate=(
+            '%{customdata[0]}<br>Time: %{customdata[1]}<br>Distance: ('+run+') %{customdata[2]} km<br>'
+            'Pacing: %{customdata[3]} min/km<br>Cadence: %{y:.0f} spm'
+            )
+            #hovertemplate='Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm<br>Distance: '+run
+            #hovertemplate=Title_val +'<br>Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm<br>Distance: '+run
+            #hovertemplate=Title +'<br>Time: ' + Time +'<br>Distance: ('+run+') <br>Pacing: %{x:.2f} min/km<br>Cadence: %{y:.0f} spm'
+            #hovertemplate=Title + '<br>Time: ' +Time+'<br>Distance: ('+run+')'+str(Distance)+' <br>Pacing: ' + str(Avg_Pace) + ' min/km<br>Cadence: %{y:.0f} spm'
+        ))
+    fig.update_layout(title='Pacing vs Cadence by Run Distance',
+                        xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
+    st.plotly_chart(fig, use_container_width=True)
+
+with GC_tab4: #Map
+    st.dataframe(df_G[["activityId", "activityName", "startTimeLocal", "distance_km"]])
+
+    sel_id = st.selectbox(
+        "Select a run to show map",
+        df_G["activityId"].tolist(),
+        format_func=lambda x: f" {runs_df.loc[runs_df['activityId'] == x, 'distance_km'].iloc[0]:.1f}km/ " +
+                              f"{runs_df.loc[runs_df['activityId'] == x, 'duration'].iloc[0]/60:.1f}min/ " +
+                              runs_df.loc[runs_df['activityId'] == x, "activityName"].iloc[0],
+        key="run_select",
+    )
+    #st.write("API is", type(api), "logged in?" , api is not None)
+
+    if sel_id and api is not None:
+        try:
+            details = api.get_activity_details(sel_id)
+            # Inspect once to understand the structure
+            # st.json(details)  # or:
+            # st.json(details.get("geoPolylineDTO", {}))
+
+            geo = details.get("geoPolylineDTO")
+            if not geo:
+                st.warning("No GPS polyline available for this activity.")
+            else:
+                poly = geo.get("polyline", [])
+                if not isinstance(poly, list):
+                    st.error(f"Unexpected polyline format: {type(poly)}")
+                else:
+                    pts = []
+                    for p in poly:
+                        # case 1: dict with lat/lon keys
+                        if isinstance(p, dict) and "lat" in p and "lon" in p:
+                            pts.append((p["lat"], p["lon"]))
+                        # case 2: list/tuple [lat, lon]
+                        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                            pts.append((p[0], p[1]))
+
+                    if not pts:
+                        st.warning("No GPS track points found.")
+                    else:
+                        gps_df = pd.DataFrame(pts, columns=["lat", "lon"])
+                        fig = px.line_mapbox(
+                            gps_df,
+                            lat="lat",
+                            lon="lon",
+                            zoom=guess_zoom_from_bounds(gps_df),
+                            height=500,
+                        )
+                        fig.update_traces(line_color="red", line_width=2)
+                        
+                        # Add km markers
+                        km_df = add_km_markers(gps_df)
+                        if not km_df.empty:
+                            fig.add_scattermapbox(
+                                lat=km_df["lat"],
+                                lon=km_df["lon"],
+                                mode="markers+text",
+                                marker=dict(
+                                    size=18,
+                                    color="white",
+                                    opacity=0.9,
+                                ),
+                                text=km_df["km"].astype(str),
+                                textposition="middle center",
+                                textfont=dict(color="black", size=10),
+                                name="km markers",
+                                showlegend=False,
+                            )
+                        
+                        fig.update_layout(
+                            mapbox_style="open-street-map",
+                            mapbox=dict(
+                                zoom=guess_zoom_from_bounds(gps_df),
+                                center=dict(
+                                    lat=gps_df["lat"].mean(),
+                                    lon=gps_df["lon"].mean(),
+                                ),
+                            ),
+                            margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Error while talking to Garmin: {e!r} ({type(e)})")
+        
