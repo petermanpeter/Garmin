@@ -11,6 +11,8 @@ import os
 from io import BytesIO
 import base64
 import datetime
+import time
+import requests
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -195,6 +197,83 @@ def to_excel_bytes(df: pd.DataFrame) -> BytesIO:
         df.to_excel(writer, index=False, sheet_name="Activities")
     buffer.seek(0)
     return buffer
+
+def garmin_login_with_retry(email, password, max_retries=1, initial_delay=30):
+    """
+    Login to Garmin with long delays between retries.
+    We use fewer retries but longer delays to avoid hitting rate limits.
+    
+    Args:
+        email: Garmin email
+        password: Garmin password
+        max_retries: Maximum number of retry attempts (default 1 = just 2 attempts total)
+        initial_delay: Initial delay in seconds before retry (default 30)
+        
+    Returns:
+        Garmin API object if successful
+        
+    Raises:
+        GarminConnectAuthenticationError: For auth failures
+        Exception: For other errors after all retries exhausted
+    """
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            st.write(f"🔄 Attempt {attempt + 1}/{max_retries + 1}...")
+            api = Garmin(email, password)
+            api.login()
+            return api
+            
+        except requests.exceptions.HTTPError as e:
+            # Handle 429 (Too Many Requests) with exponential backoff
+            if e.response.status_code == 429:
+                if attempt < max_retries:
+                    delay = initial_delay * (2 ** attempt)  # 30s, 60s, 120s, etc.
+                    st.warning(
+                        f"⏳ **HTTP 429: Rate Limited**\n\n"
+                        f"Waiting **{delay} seconds** before retry {attempt + 1}/{max_retries}...\n\n"
+                        f"*Garmin's servers are protecting against too many login attempts.*"
+                    )
+                    time.sleep(delay)
+                    last_error = e
+                    continue
+                else:
+                    raise Exception(
+                        f"❌ Rate limited by Garmin after {max_retries} retries.\n\n"
+                        f"Please wait **5-10 minutes** before trying again."
+                    )
+            else:
+                # Other HTTP errors - don't retry
+                raise
+                
+        except GarminConnectAuthenticationError as e:
+            # Don't retry auth errors
+            raise
+            
+        except Exception as e:
+            # For non-HTTP errors, check if it's a rate limit wrapped in another exception
+            error_str = str(e)
+            if "429" in error_str or "Too Many Requests" in error_str or "Rate limited" in error_str:
+                if attempt < max_retries:
+                    delay = initial_delay * (2 ** attempt)
+                    st.warning(
+                        f"⏳ **Rate Limit Detected**\n\n"
+                        f"Waiting **{delay} seconds** before retry {attempt + 1}/{max_retries}..."
+                    )
+                    time.sleep(delay)
+                    last_error = e
+                    continue
+                else:
+                    raise
+            else:
+                # Other exceptions - re-raise immediately
+                raise
+    
+    if last_error:
+        raise last_error
+
+
  
 #1 Load the data
 #service = gmail_authenticate()
@@ -261,9 +340,10 @@ with tab4:  #GarminConnect login
             st.error("Please enter email and password")
         else:
             try:
-                api = Garmin(email, password)
-                api.login()
+                st.info("🔐 Logging in to Garmin Connect...")
+                api = garmin_login_with_retry(email, password)
                 st.session_state.gc_api = api  # save API
+                st.success("✅ Logged in successfully!")
                 today = datetime.date.today()
                 start_date = today - datetime.timedelta(days=365*5)
 
@@ -293,20 +373,36 @@ with tab4:  #GarminConnect login
                     st.info("No run activities found in the last 5 years.")
                 else:
                     df = pd.DataFrame(acts)
-                    #st.subheader("Raw activities (first 10 rows)")
-                    #st.write("Columns:", list(df.columns))
-                    #st.dataframe(df.head(10))
-
                     st.write("Found runs:", len(df))
                     df["distance_km"] = df["distance"] / 1000.0
                     df["distance_km"] = df["distance_km"].round(1)
                     st.session_state.gc_df = df  # save dataframe
+                    st.session_state.last_activity_type = activity_type
 
     
-            except GarminConnectAuthenticationError:
-                st.error("Garmin authentication failed. Check email/password.")
+            except GarminConnectAuthenticationError as e:
+                st.error("❌ **Authentication Failed**\n\nCheck that your email and password are correct.")
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    st.error(
+                        "❌ **HTTP 429 - Rate Limited by Garmin**\n\n"
+                        "Too many requests detected. Please wait **5-10 minutes** before trying again."
+                    )
+                else:
+                    st.error(f"❌ **HTTP Error {e.response.status_code}**\n\n{str(e)}")
             except Exception as e:
-                st.error(f"Error while talking to Garmin: {e}")
+                error_str = str(e)
+                st.error(
+                    f"❌ **Login Error**\n\n"
+                    f"```\n{error_str}\n```\n\n"
+                    "**Troubleshooting:**\n"
+                    "- Try logging in with a browser first to verify credentials\n"
+                    "- Check if Garmin is down: https://status.garmin.com\n"
+                    "- Wait 5-10 minutes if you had recent failed attempts\n"
+                    "- Check your internet connection"
+                )
+
+
 
 # Always render UI if we have data
 runs_df = st.session_state.get("gc_df")  # None if not set

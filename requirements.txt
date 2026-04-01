@@ -11,3 +11,10 @@ google-api-python-client
 openpyxl
 garminconnect
 xlsxwriter
+
+# Needed for scraping sites protected by Cloudflare
+cloudscraper
+
+# Optional: browser automation fallback for JS-based challenges
+selenium
+webdriver-manager
