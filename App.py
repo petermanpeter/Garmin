@@ -191,6 +191,72 @@ def guess_zoom_from_bounds(gps_df, viewport_width=800, viewport_height=500):
     # Clamp to valid Mapbox range (0-22)
     return max(0, min(22, zoom))
 
+def extract_polyline_with_metrics(poly):
+    """Extract lat, lon, elevation, and timestamp from polyline data."""
+    pts = []
+    elevations = []
+    times = []
+    
+    for p in poly:
+        # Extract lat/lon
+        if isinstance(p, dict) and "lat" in p and "lon" in p:
+            pts.append((p["lat"], p["lon"]))
+            elevations.append(p.get("elevation", p.get("elev", None)))
+            times.append(p.get("timestamp", None))
+        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+            pts.append((p[0], p[1]))
+            elevations.append(p[2] if len(p) > 2 else None)
+            times.append(p[3] if len(p) > 3 else None)
+    
+    return pts, elevations, times
+
+def calculate_segment_metrics(gps_df, start_idx, end_idx):
+    """Calculate distance, time, and slope data for a segment."""
+    if start_idx >= end_idx or start_idx >= len(gps_df) or end_idx > len(gps_df):
+        return None
+    
+    segment = gps_df.iloc[start_idx:end_idx].copy()
+    
+    # Calculate distance
+    cum_dist = [0.0]
+    for i in range(1, len(segment)):
+        d = haversine_km(
+            segment.iloc[i-1]["lat"], segment.iloc[i-1]["lon"],
+            segment.iloc[i]["lat"], segment.iloc[i]["lon"],
+        )
+        cum_dist.append(cum_dist[-1] + d)
+    
+    segment["cum_dist_km"] = cum_dist
+    total_distance = cum_dist[-1]
+    
+    # Calculate elevation change and slope
+    slopes = []
+    if "elevation" in segment.columns:
+        for i in range(1, len(segment)):
+            elev_diff = segment.iloc[i]["elevation"] - segment.iloc[i-1]["elevation"]
+            dist_m = cum_dist[i] * 1000  # Convert km to m
+            if dist_m > 0:
+                slope = (elev_diff / dist_m) * 100  # Percentage slope
+                slopes.append(slope)
+            else:
+                slopes.append(0)
+        segment["slope"] = [0] + slopes
+    else:
+        segment["slope"] = 0
+    
+    # Calculate time segment if available
+    time_display = "N/A"
+    if "timestamp" in segment.columns and segment["timestamp"].notna().any():
+        # Try to calculate time between points
+        pass
+    
+    return {
+        "distance_km": total_distance,
+        "segment": segment,
+        "slopes": slopes if slopes else None,
+        "time_display": time_display
+    }
+
 def to_excel_bytes(df: pd.DataFrame) -> BytesIO:
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:  # pip install xlsxwriter
@@ -598,7 +664,7 @@ with GC_tab3: #Pacing vs Cadence
                         xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
     st.plotly_chart(fig, use_container_width=True)
 
-with GC_tab4: #Map
+with GC_tab4: #Map - Enhanced with Route Selection
     st.dataframe(df_G[["activityId", "activityName", "startTimeLocal", "distance_km"]])
 
     sel_id = st.selectbox(
@@ -609,16 +675,12 @@ with GC_tab4: #Map
                               runs_df.loc[runs_df['activityId'] == x, "activityName"].iloc[0],
         key="run_select",
     )
-    #st.write("API is", type(api), "logged in?" , api is not None)
 
     if sel_id and api is not None:
         try:
             details = api.get_activity_details(sel_id)
-            # Inspect once to understand the structure
-            # st.json(details)  # or:
-            # st.json(details.get("geoPolylineDTO", {}))
-
             geo = details.get("geoPolylineDTO")
+            
             if not geo:
                 st.warning("No GPS polyline available for this activity.")
             else:
@@ -626,27 +688,88 @@ with GC_tab4: #Map
                 if not isinstance(poly, list):
                     st.error(f"Unexpected polyline format: {type(poly)}")
                 else:
-                    pts = []
-                    for p in poly:
-                        # case 1: dict with lat/lon keys
-                        if isinstance(p, dict) and "lat" in p and "lon" in p:
-                            pts.append((p["lat"], p["lon"]))
-                        # case 2: list/tuple [lat, lon]
-                        elif isinstance(p, (list, tuple)) and len(p) >= 2:
-                            pts.append((p[0], p[1]))
+                    # Extract polyline data with metrics
+                    pts, elevations, times = extract_polyline_with_metrics(poly)
 
                     if not pts:
                         st.warning("No GPS track points found.")
                     else:
+                        # Create GPS DataFrame
                         gps_df = pd.DataFrame(pts, columns=["lat", "lon"])
+                        gps_df["elevation"] = elevations
+                        gps_df["timestamp"] = times
+                        
+                        # Initialize session state for point selection
+                        if "start_idx" not in st.session_state:
+                            st.session_state.start_idx = 0
+                        if "end_idx" not in st.session_state:
+                            st.session_state.end_idx = len(gps_df) - 1
+                        
+                        # Point selection controls
+                        st.subheader("📍 Route Segment Selection")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.session_state.start_idx = st.slider(
+                                "Start point index",
+                                0,
+                                len(gps_df) - 2,
+                                st.session_state.start_idx,
+                                key="start_slider"
+                            )
+                        
+                        with col2:
+                            st.session_state.end_idx = st.slider(
+                                "End point index",
+                                st.session_state.start_idx + 1,
+                                len(gps_df),
+                                st.session_state.end_idx,
+                                key="end_slider"
+                            )
+                        
+                        # Create base map with full route in red
                         fig = px.line_mapbox(
                             gps_df,
                             lat="lat",
                             lon="lon",
                             zoom=guess_zoom_from_bounds(gps_df),
-                            height=500,
+                            height=600,
                         )
-                        fig.update_traces(line_color="red", line_width=2)
+                        fig.update_traces(line_color="red", line_width=2, name="Full Route")
+                        
+                        # Add selected segment in green
+                        segment_gps = gps_df.iloc[st.session_state.start_idx:st.session_state.end_idx]
+                        fig.add_scattermapbox(
+                            lat=segment_gps["lat"],
+                            lon=segment_gps["lon"],
+                            mode="lines",
+                            line=dict(color="green", width=4),
+                            name="Selected Segment",
+                            hovertext=[f"Point {i}" for i in range(len(segment_gps))],
+                            hoverinfo="text",
+                        )
+                        
+                        # Add start point marker (blue)
+                        fig.add_scattermapbox(
+                            lat=[gps_df.iloc[st.session_state.start_idx]["lat"]],
+                            lon=[gps_df.iloc[st.session_state.start_idx]["lon"]],
+                            mode="markers",
+                            marker=dict(size=12, color="blue"),
+                            name="Start Point",
+                            hovertext=["START"],
+                            showlegend=True,
+                        )
+                        
+                        # Add end point marker (red)
+                        fig.add_scattermapbox(
+                            lat=[gps_df.iloc[st.session_state.end_idx - 1]["lat"]],
+                            lon=[gps_df.iloc[st.session_state.end_idx - 1]["lon"]],
+                            mode="markers",
+                            marker=dict(size=12, color="red"),
+                            name="End Point",
+                            hovertext=["END"],
+                            showlegend=True,
+                        )
                         
                         # Add km markers
                         km_df = add_km_markers(gps_df)
@@ -655,21 +778,16 @@ with GC_tab4: #Map
                                 lat=km_df["lat"],
                                 lon=km_df["lon"],
                                 mode="markers+text",
-                                marker=dict(
-                                    size=18,
-                                    color="white",
-                                    opacity=0.9,
-                                ),
+                                marker=dict(size=12, color="white", opacity=0.7),
                                 text=km_df["km"].astype(str),
                                 textposition="middle center",
-                                textfont=dict(color="black", size=10),
+                                textfont=dict(color="black", size=9),
                                 name="km markers",
                                 showlegend=False,
                             )
                         
                         fig.update_layout(
                             mapbox_style="carto-positron",
-                            # mapbox_style="open-street-map",
                             mapbox=dict(
                                 zoom=guess_zoom_from_bounds(gps_df),
                                 center=dict(
@@ -677,9 +795,79 @@ with GC_tab4: #Map
                                     lon=gps_df["lon"].mean(),
                                 ),
                             ),
+                            hovermode="closest",
                             margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                            height=600,
                         )
+                        
                         st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Calculate and display segment metrics
+                        st.subheader("📊 Segment Metrics")
+                        metrics = calculate_segment_metrics(gps_df, st.session_state.start_idx, st.session_state.end_idx)
+                        
+                        if metrics:
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.metric("Distance", f"{metrics['distance_km']:.2f} km")
+                            
+                            with col2:
+                                # Calculate time if possible
+                                duration_text = metrics['time_display']
+                                st.metric("Time", duration_text)
+                            
+                            with col3:
+                                # Calculate average slope
+                                if metrics['slopes']:
+                                    avg_slope = np.mean(metrics['slopes'])
+                                    st.metric("Avg Slope", f"{avg_slope:.1f}%")
+                                else:
+                                    st.metric("Avg Slope", "N/A")
+                            
+                            # Display elevation profile (slope graph)
+                            if metrics['slopes'] and not np.isnan(metrics['slopes']).all():
+                                st.subheader("📈 Elevation Profile")
+                                segment_df = metrics['segment'].copy()
+                                segment_df['distance_progress'] = segment_df['cum_dist_km']
+                                
+                                # Create slope graph
+                                fig_slope = go.Figure()
+                                
+                                # Add elevation line
+                                if "elevation" in segment_df.columns and segment_df["elevation"].notna().any():
+                                    fig_slope.add_trace(go.Scatter(
+                                        x=segment_df['cum_dist_km'],
+                                        y=segment_df['elevation'],
+                                        mode='lines',
+                                        name='Elevation',
+                                        fill='tozeroy',
+                                        line=dict(color='steelblue'),
+                                        hovertemplate='<b>Distance: %{x:.2f} km</b><br>Elevation: %{y:.0f} m<extra></extra>'
+                                    ))
+                                    
+                                    fig_slope.update_layout(
+                                        title="Elevation Profile Along Route",
+                                        xaxis_title="Distance (km)",
+                                        yaxis_title="Elevation (m)",
+                                        hovermode='x unified',
+                                        height=400
+                                    )
+                                    
+                                    st.plotly_chart(fig_slope, use_container_width=True)
+                        
+                        # Hover box with detailed information
+                        with st.expander("ℹ️ Route Details", expanded=False):
+                            st.write(f"**Total points in this segment:** {len(segment_gps)}")
+                            st.write(f"**Start point:** Index {st.session_state.start_idx}")
+                            st.write(f"**End point:** Index {st.session_state.end_idx - 1}")
+                            
+                            if metrics:
+                                st.write(f"**Segment distance:** {metrics['distance_km']:.2f} km")
+                                if "elevation" in segment_gps.columns:
+                                    elev_data = segment_gps["elevation"].dropna()
+                                    if len(elev_data) > 0:
+                                        st.write(f"**Elevation gain:** {(elev_data.max() - elev_data.min()):.0f} m")
 
         except Exception as e:
             st.error(f"Error while talking to Garmin: {e!r} ({type(e)})")
