@@ -16,6 +16,6 @@ pip freeze > requirements.txt
 
 # Commit
 git add App.py Weight_20260111.xlsx requirements.txt README.md
-git commit -m "v20260403: add route selection to view distance/time/slope map"  
+git commit -m "v20260403b: add route selection to view distance/time/slope map"  
 git push  
 

@@ -229,18 +229,30 @@ def calculate_segment_metrics(gps_df, start_idx, end_idx):
     segment["cum_dist_km"] = cum_dist
     total_distance = cum_dist[-1]
     
-    # Calculate elevation change and slope
+    # Calculate elevation change and slope with proper None checks
     slopes = []
-    if "elevation" in segment.columns:
+    if "elevation" in segment.columns and segment["elevation"].notna().any():
         for i in range(1, len(segment)):
-            elev_diff = segment.iloc[i]["elevation"] - segment.iloc[i-1]["elevation"]
-            dist_m = cum_dist[i] * 1000  # Convert km to m
-            if dist_m > 0:
-                slope = (elev_diff / dist_m) * 100  # Percentage slope
-                slopes.append(slope)
+            elev_curr = segment.iloc[i]["elevation"]
+            elev_prev = segment.iloc[i-1]["elevation"]
+            # Only calculate slope if both elevation values exist
+            if pd.notna(elev_curr) and pd.notna(elev_prev):
+                try:
+                    elev_diff = float(elev_curr) - float(elev_prev)
+                    dist_m = cum_dist[i] * 1000  # Convert km to m
+                    if dist_m > 0:
+                        slope = (elev_diff / dist_m) * 100  # Percentage slope
+                        slopes.append(slope)
+                    else:
+                        slopes.append(0)
+                except (TypeError, ValueError):
+                    slopes.append(0)
             else:
                 slopes.append(0)
-        segment["slope"] = [0] + slopes
+        if slopes:
+            segment["slope"] = [0] + slopes
+        else:
+            segment["slope"] = 0
     else:
         segment["slope"] = 0
     
@@ -253,7 +265,7 @@ def calculate_segment_metrics(gps_df, start_idx, end_idx):
     return {
         "distance_km": total_distance,
         "segment": segment,
-        "slopes": slopes if slopes else None,
+        "slopes": [s for s in slopes if s is not None] if slopes else None,
         "time_display": time_display
     }
 
@@ -819,14 +831,21 @@ with GC_tab4: #Map - Enhanced with Route Selection
                             
                             with col3:
                                 # Calculate average slope
-                                if metrics['slopes']:
-                                    avg_slope = np.mean(metrics['slopes'])
-                                    st.metric("Avg Slope", f"{avg_slope:.1f}%")
+                                if metrics['slopes'] and len(metrics['slopes']) > 0:
+                                    try:
+                                        slope_vals = [s for s in metrics['slopes'] if pd.notna(s)]
+                                        if slope_vals:
+                                            avg_slope = np.mean(slope_vals)
+                                            st.metric("Avg Slope", f"{avg_slope:.1f}%")
+                                        else:
+                                            st.metric("Avg Slope", "N/A")
+                                    except (TypeError, ValueError):
+                                        st.metric("Avg Slope", "N/A")
                                 else:
                                     st.metric("Avg Slope", "N/A")
                             
                             # Display elevation profile (slope graph)
-                            if metrics['slopes'] and not np.isnan(metrics['slopes']).all():
+                            if "elevation" in metrics['segment'].columns and metrics['segment']["elevation"].notna().any():
                                 st.subheader("📈 Elevation Profile")
                                 segment_df = metrics['segment'].copy()
                                 segment_df['distance_progress'] = segment_df['cum_dist_km']
@@ -834,11 +853,12 @@ with GC_tab4: #Map - Enhanced with Route Selection
                                 # Create slope graph
                                 fig_slope = go.Figure()
                                 
-                                # Add elevation line
-                                if "elevation" in segment_df.columns and segment_df["elevation"].notna().any():
+                                # Add elevation line (only include non-null elevation data)
+                                elev_mask = segment_df["elevation"].notna()
+                                if elev_mask.any():
                                     fig_slope.add_trace(go.Scatter(
-                                        x=segment_df['cum_dist_km'],
-                                        y=segment_df['elevation'],
+                                        x=segment_df.loc[elev_mask, 'cum_dist_km'],
+                                        y=segment_df.loc[elev_mask, 'elevation'],
                                         mode='lines',
                                         name='Elevation',
                                         fill='tozeroy',
