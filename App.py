@@ -211,6 +211,46 @@ OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 OSM_ATTRIBUTION = "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors"
 
 
+def _base_osm_map(center, zoom_start):
+    """Leaflet map whose DEFAULT basemap is OpenStreetMap.
+
+    Two details matter here:
+    - folium adds every TileLayer to the map, so the layer added last
+      draws on top. The CartoDB layer therefore gets show=False: it is
+      listed in the layer switcher but is NOT shown until picked, so
+      OpenStreetMap is what you see first.
+    - scroll_wheel_zoom=False stops the map from trapping the mouse
+      wheel, so the page can still be scrolled (e.g. back up to the
+      tabs) while the pointer is over the map. Zoom with the +/-
+      buttons or by double-clicking instead.
+    """
+    m = folium.Map(
+        location=center,
+        zoom_start=zoom_start,
+        tiles=None,
+        control_scale=True,
+        scroll_wheel_zoom=False,
+    )
+    folium.TileLayer(
+        tiles=OSM_TILE_URL,
+        attr=OSM_ATTRIBUTION,
+        name="OpenStreetMap",
+        overlay=False,
+        control=True,
+        show=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        attr=OSM_ATTRIBUTION + " &copy; CARTO",
+        name="CartoDB light (OSM data)",
+        subdomains="abcd",
+        overlay=False,
+        control=True,
+        show=False,
+    ).add_to(m)
+    return m
+
+
 def build_osm_map(gps_df, start_idx, end_idx, km_df=None):
     """Build a folium (Leaflet) map on OpenStreetMap tiles.
 
@@ -221,27 +261,7 @@ def build_osm_map(gps_df, start_idx, end_idx, km_df=None):
       (both render OpenStreetMap data; no API key for either)
     """
     center = [gps_df["lat"].mean(), gps_df["lon"].mean()]
-    m = folium.Map(
-        location=center,
-        zoom_start=guess_zoom_from_bounds(gps_df),
-        tiles=None,
-        control_scale=True,
-    )
-    folium.TileLayer(
-        tiles=OSM_TILE_URL,
-        attr=OSM_ATTRIBUTION,
-        name="OpenStreetMap",
-        overlay=False,
-        control=True,
-    ).add_to(m)
-    folium.TileLayer(
-        tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-        attr=OSM_ATTRIBUTION + " &copy; CARTO",
-        name="CartoDB light (OSM data)",
-        subdomains="abcd",
-        overlay=False,
-        control=True,
-    ).add_to(m)
+    m = _base_osm_map(center, guess_zoom_from_bounds(gps_df))
 
     # Full route (red)
     folium.PolyLine(
@@ -292,6 +312,38 @@ def build_osm_map(gps_df, start_idx, end_idx, km_df=None):
         [gps_df["lat"].min(), gps_df["lon"].min()],
         [gps_df["lat"].max(), gps_df["lon"].max()],
     ])
+    return m
+
+
+def build_all_runs_map(routes):
+    """Overlay every run's route on OpenStreetMap (for the All Run tab).
+
+    Each route is drawn in semi-transparent blue (opacity 0.18). Where
+    routes overlap, the layers stack and the blue gets DARKER — so the
+    darkest blue marks the most frequently run routes.
+    `routes` is a list of [(lat, lon), ...] point lists.
+    """
+    all_pts = [p for r in routes for p in r]
+    lats = np.array([p[0] for p in all_pts], dtype=float)
+    lons = np.array([p[1] for p in all_pts], dtype=float)
+    center = [float(lats.mean()), float(lons.mean())]
+    m = _base_osm_map(center, 12)
+
+    for route in routes:
+        if len(route) >= 2:
+            folium.PolyLine(
+                route, color="#003399", weight=3, opacity=0.18,
+            ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+    # Frame the main running region (percentiles drop far-flung travel
+    # runs that would otherwise force a continent-wide view).
+    lo_lat, hi_lat = np.percentile(lats, [1, 99])
+    lo_lon, hi_lon = np.percentile(lons, [1, 99])
+    if lo_lat == hi_lat or lo_lon == hi_lon:  # single-area fallback
+        lo_lat, hi_lat = lats.min(), lats.max()
+        lo_lon, hi_lon = lons.min(), lons.max()
+    m.fit_bounds([[float(lo_lat), float(lo_lon)], [float(hi_lat), float(hi_lon)]])
     return m
 
 def extract_polyline_with_metrics(poly):
@@ -606,7 +658,7 @@ st.download_button(
     key="download_gc_runs",
 )
 
-GC_tab1, GC_tab2, GC_tab3, GC_tab4 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence', 'Map'])
+GC_tab1, GC_tab2, GC_tab3, GC_tab4, GC_tab5 = st.tabs(['Weight', 'Distance per month', 'Pacing vs Cadence', 'Specific Run', 'All Run'])
 
 with GC_tab1:  #Weight
     st.title('Weight vs Date')
@@ -779,7 +831,7 @@ with GC_tab3: #Pacing vs Cadence
                         xaxis_title='Pacing (min/km)', yaxis_title='Cadence (steps/min)')
     st.plotly_chart(fig, use_container_width=True)
 
-with GC_tab4: #Map - Enhanced with Route Selection
+with GC_tab4: #Specific Run - Enhanced with Route Selection
     st.dataframe(df_G[["activityId", "activityName", "startTimeLocal", "distance_km"]])
 
     sel_id = st.selectbox(
@@ -952,4 +1004,127 @@ with GC_tab4: #Map - Enhanced with Route Selection
 
         except Exception as e:
             st.error(f"Error while talking to Garmin: {e!r} ({type(e)})")
-        
+
+with GC_tab5:  # All Run - overlay of all runs in the chosen period
+    st.title('All Runs in Period')
+    st.write(
+        "Every run in the period below, layered on one OpenStreetMap. "
+        "Each route is drawn in semi-transparent blue, so where routes "
+        "overlap the blue stacks up **darker — darkest blue = most "
+        "frequently run route**."
+    )
+
+    if not _HAS_FOLIUM:
+        st.error(
+            "Map libraries missing. Run: "
+            "`pip install folium streamlit-folium` "
+            "(both are in requirements.txt)."
+        )
+    elif api is None:
+        st.info("👆 Please log in first to load all-run routes.")
+    else:
+        all_runs = runs_df.copy()
+        all_runs["Date"] = pd.to_datetime(all_runs["startTimeLocal"], errors="coerce")
+        all_runs = all_runs.dropna(subset=["Date"])
+        min_date_all = all_runs["Date"].min().date()
+        max_date_all = all_runs["Date"].max().date()
+
+        # Default to the period already chosen in the
+        # 'Distance per month' tab (start_date / end_date), if set.
+        try:
+            default_period = (
+                max(min_date_all, min(start_date, max_date_all)),
+                min(max_date_all, max(end_date, min_date_all)),
+            )
+            if default_period[0] > default_period[1]:
+                default_period = (min_date_all, max_date_all)
+        except NameError:
+            default_period = (min_date_all, max_date_all)
+
+        all_start, all_end = st.slider(
+            "Period for All Run:",
+            min_value=min_date_all,
+            max_value=max_date_all,
+            value=default_period,
+            format="YYYY-MM-DD",
+            key="all_run_period",
+        )
+
+        period_df = all_runs[
+            (all_runs["Date"].dt.date >= all_start)
+            & (all_runs["Date"].dt.date <= all_end)
+        ].sort_values("Date")
+        st.metric("Runs in period", len(period_df))
+
+        if len(period_df) == 0:
+            st.info("No runs in this period.")
+        else:
+            if len(period_df) > 300:
+                st.warning(
+                    f"{len(period_df)} runs in this period — loading all "
+                    "routes from Garmin can take a while and may hit "
+                    "Garmin rate limits. A shorter period is faster."
+                )
+
+            # Routes are fetched once and kept in session state, so
+            # moving sliders / switching tabs does not re-download them.
+            if "all_routes_cache" not in st.session_state:
+                st.session_state.all_routes_cache = {}
+            route_cache = st.session_state.all_routes_cache
+
+            missing_ids = [
+                aid for aid in period_df["activityId"].tolist()
+                if aid not in route_cache
+            ]
+            if missing_ids:
+                st.write(
+                    f"{len(missing_ids)} route(s) in this period have not "
+                    "been loaded from Garmin yet."
+                )
+                if st.button(
+                    f"Load {len(missing_ids)} route(s) for this period",
+                    key="load_all_routes",
+                ):
+                    progress = st.progress(0.0)
+                    failed = 0
+                    for i, aid in enumerate(missing_ids):
+                        try:
+                            details = api.get_activity_details(aid)
+                            geo = details.get("geoPolylineDTO") or {}
+                            poly = geo.get("polyline", []) or []
+                            pts, _, _ = extract_polyline_with_metrics(poly)
+                            route_cache[aid] = pts
+                        except Exception:
+                            route_cache[aid] = []
+                            failed += 1
+                        progress.progress((i + 1) / len(missing_ids))
+                    if failed:
+                        st.warning(
+                            f"{failed} route(s) could not be loaded "
+                            "(Garmin may be rate-limiting — try again later)."
+                        )
+                    st.rerun()
+
+            routes = [
+                route_cache[aid]
+                for aid in period_df["activityId"].tolist()
+                if len(route_cache.get(aid, [])) >= 2
+            ]
+            if routes:
+                st.write(
+                    f"Showing **{len(routes)}** run route(s), "
+                    f"{all_start} → {all_end}."
+                )
+                all_map = build_all_runs_map(routes)
+                st_folium(
+                    all_map,
+                    height=600,
+                    use_container_width=True,
+                    returned_objects=[],
+                    key=f"all_run_map_{all_start}_{all_end}_{len(routes)}",
+                )
+                st.caption(
+                    "🟦 Light blue = run once or twice · Dark blue = run "
+                    "often. Zoom with the +/− buttons (mouse-wheel zoom is "
+                    "off so the page still scrolls back to the tabs)."
+                )

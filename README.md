@@ -1,6 +1,17 @@
 # Garmin program description
 analyze Garmin activities and weight
 
+# Update v20261020b
+- Basemap default is now truly OpenStreetMap (the CartoDB layer is only
+  listed in the layer switcher, not shown first).
+- Mouse-wheel zoom is off on the maps, so the page can be scrolled back
+  up to the tabs while the pointer is over a map (zoom with +/− buttons).
+- The **Map** tab is renamed **Specific Run**.
+- New **All Run** tab: every run in the chosen period layered on one
+  map in semi-transparent blue — overlapping routes stack darker, so
+  darkest blue = most frequently run route. Routes are fetched once
+  (button) and cached in the session.
+
 # Map: OpenStreetMap (since v20261020)
 The route map in the **Map** tab is drawn with Leaflet (folium /
 streamlit-folium) directly on OpenStreetMap tiles
