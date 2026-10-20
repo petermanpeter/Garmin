@@ -1,6 +1,21 @@
 # Garmin program description
 analyze Garmin activities and weight
 
+# Map: OpenStreetMap (since v20261020)
+The route map in the **Map** tab is drawn with Leaflet (folium /
+streamlit-folium) directly on OpenStreetMap tiles
+(`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, © OpenStreetMap
+contributors). **No Google Maps or Mapbox API key/token is needed.**
+
+Why it changed: the map previously used Plotly's Mapbox API
+(`px.line_mapbox` / `add_scattermapbox` / `mapbox_style="carto-positron"`),
+which was removed in Plotly 6+, so the map could not render on a fresh
+install. The OSM map keeps the same features: full route in red, selected
+segment in green, blue start / red end markers, numbered km markers, and
+the segment distance / slope metrics + elevation profile below it. A layer
+switcher (top-right of the map) also offers a CartoDB light basemap, which
+renders the same OpenStreetMap data.
+
 # Install Command
 pip install dash plotly pandas openpyxl streamlit
 pip install --upgrade google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client

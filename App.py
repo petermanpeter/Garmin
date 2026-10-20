@@ -22,6 +22,21 @@ import json
 from math import radians, sin, cos, asin, sqrt
 import math
 
+# --- OpenStreetMap rendering (Leaflet via folium) ---
+# The route map used to be drawn with Plotly's Mapbox API
+# (px.line_mapbox / add_scattermapbox / mapbox_style="carto-positron").
+# That API was removed in Plotly 6+, so on a fresh install the Map tab
+# could not render at all. folium draws directly on OpenStreetMap tiles:
+# no Google Maps / Mapbox API key or token is needed.
+try:
+    import folium
+    from streamlit_folium import st_folium
+    _HAS_FOLIUM = True
+except ImportError:  # requirements.txt not installed yet
+    folium = None
+    st_folium = None
+    _HAS_FOLIUM = False
+
 #0 Target file to be imported
 df_G = pd.read_csv('Activities_Run_20251202.csv')
 garmin_file = 'Weight_20260111.xlsx'
@@ -153,7 +168,7 @@ def add_km_markers(gps_df):
 
 def guess_zoom_from_bounds(gps_df, viewport_width=800, viewport_height=500):
     """
-    Calculate optimal Mapbox zoom for given lat/lon bounds.
+    Calculate optimal OpenStreetMap (Leaflet) zoom for given lat/lon bounds.
     viewport_width/height approximate Streamlit container pixels.
     """
     if len(gps_df) < 2:
@@ -187,9 +202,97 @@ def guess_zoom_from_bounds(gps_df, viewport_width=800, viewport_height=500):
     
     # Zoom formula: log2(C / mpp) - 8 (for 256px tiles)
     zoom = math.floor((math.log(C / mpp) / LOG2) - 8)
-    
-    # Clamp to valid Mapbox range (0-22)
-    return max(0, min(22, zoom))
+
+    # Clamp to valid OpenStreetMap range (0-19; 18 is a sensible max here)
+    return max(0, min(18, zoom))
+
+
+OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+OSM_ATTRIBUTION = "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors"
+
+
+def build_osm_map(gps_df, start_idx, end_idx, km_df=None):
+    """Build a folium (Leaflet) map on OpenStreetMap tiles.
+
+    - Full route in red, selected segment in green (thicker)
+    - Start point in blue, end point in red
+    - One numbered marker per full km, when km_df is given
+    - Layer switcher: OpenStreetMap (default) or CartoDB light
+      (both render OpenStreetMap data; no API key for either)
+    """
+    center = [gps_df["lat"].mean(), gps_df["lon"].mean()]
+    m = folium.Map(
+        location=center,
+        zoom_start=guess_zoom_from_bounds(gps_df),
+        tiles=None,
+        control_scale=True,
+    )
+    folium.TileLayer(
+        tiles=OSM_TILE_URL,
+        attr=OSM_ATTRIBUTION,
+        name="OpenStreetMap",
+        overlay=False,
+        control=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        attr=OSM_ATTRIBUTION + " &copy; CARTO",
+        name="CartoDB light (OSM data)",
+        subdomains="abcd",
+        overlay=False,
+        control=True,
+    ).add_to(m)
+
+    # Full route (red)
+    folium.PolyLine(
+        gps_df[["lat", "lon"]].values.tolist(),
+        color="red", weight=2.5, opacity=0.9, tooltip="Full route",
+    ).add_to(m)
+
+    # Selected segment (green)
+    segment = gps_df.iloc[start_idx:end_idx]
+    if len(segment):
+        folium.PolyLine(
+            segment[["lat", "lon"]].values.tolist(),
+            color="green", weight=5, opacity=0.95, tooltip="Selected segment",
+        ).add_to(m)
+
+    # Start / end markers
+    start_row = gps_df.iloc[start_idx]
+    end_row = gps_df.iloc[end_idx - 1]
+    folium.CircleMarker(
+        [start_row["lat"], start_row["lon"]],
+        radius=7, color="blue", fill=True, fill_color="blue",
+        fill_opacity=1, popup="START",
+    ).add_to(m)
+    folium.CircleMarker(
+        [end_row["lat"], end_row["lon"]],
+        radius=7, color="red", fill=True, fill_color="red",
+        fill_opacity=1, popup="END",
+    ).add_to(m)
+
+    # km markers (numbered white discs)
+    if km_df is not None and not km_df.empty:
+        for _, row in km_df.iterrows():
+            folium.Marker(
+                [row["lat"], row["lon"]],
+                icon=folium.DivIcon(
+                    html=(
+                        "<div style='background:white;border:1px solid #333;"
+                        "border-radius:50%;width:18px;height:18px;"
+                        "text-align:center;font-size:10px;line-height:18px;"
+                        f"color:black;opacity:0.85'>{int(row['km'])}</div>"
+                    )
+                ),
+                tooltip=f"{int(row['km'])} km",
+            ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+    m.fit_bounds([
+        [gps_df["lat"].min(), gps_df["lon"].min()],
+        [gps_df["lat"].max(), gps_df["lon"].max()],
+    ])
+    return m
 
 def extract_polyline_with_metrics(poly):
     """Extract lat, lon, elevation, and timestamp from polyline data."""
@@ -739,80 +842,38 @@ with GC_tab4: #Map - Enhanced with Route Selection
                                 key="end_slider"
                             )
                         
-                        # Create base map with full route in red
-                        fig = px.line_mapbox(
-                            gps_df,
-                            lat="lat",
-                            lon="lon",
-                            zoom=guess_zoom_from_bounds(gps_df),
-                            height=600,
-                        )
-                        fig.update_traces(line_color="red", line_width=2, name="Full Route")
-                        
-                        # Add selected segment in green
+                        # Selected segment (also used by the metrics below)
                         segment_gps = gps_df.iloc[st.session_state.start_idx:st.session_state.end_idx]
-                        fig.add_scattermapbox(
-                            lat=segment_gps["lat"],
-                            lon=segment_gps["lon"],
-                            mode="lines",
-                            line=dict(color="green", width=4),
-                            name="Selected Segment",
-                            hovertext=[f"Point {i}" for i in range(len(segment_gps))],
-                            hoverinfo="text",
-                        )
-                        
-                        # Add start point marker (blue)
-                        fig.add_scattermapbox(
-                            lat=[gps_df.iloc[st.session_state.start_idx]["lat"]],
-                            lon=[gps_df.iloc[st.session_state.start_idx]["lon"]],
-                            mode="markers",
-                            marker=dict(size=12, color="blue"),
-                            name="Start Point",
-                            hovertext=["START"],
-                            showlegend=True,
-                        )
-                        
-                        # Add end point marker (red)
-                        fig.add_scattermapbox(
-                            lat=[gps_df.iloc[st.session_state.end_idx - 1]["lat"]],
-                            lon=[gps_df.iloc[st.session_state.end_idx - 1]["lon"]],
-                            mode="markers",
-                            marker=dict(size=12, color="red"),
-                            name="End Point",
-                            hovertext=["END"],
-                            showlegend=True,
-                        )
-                        
-                        # Add km markers
                         km_df = add_km_markers(gps_df)
-                        if not km_df.empty:
-                            fig.add_scattermapbox(
-                                lat=km_df["lat"],
-                                lon=km_df["lon"],
-                                mode="markers+text",
-                                marker=dict(size=12, color="white", opacity=0.7),
-                                text=km_df["km"].astype(str),
-                                textposition="middle center",
-                                textfont=dict(color="black", size=9),
-                                name="km markers",
-                                showlegend=False,
+
+                        # Route map on OpenStreetMap (Leaflet/folium).
+                        # Replaces the old Plotly Mapbox map, which no
+                        # longer renders on current Plotly and needed a
+                        # Mapbox style/token. OSM tiles need no API key.
+                        if not _HAS_FOLIUM:
+                            st.error(
+                                "Map libraries missing. Run: "
+                                "`pip install folium streamlit-folium` "
+                                "(both are in requirements.txt)."
                             )
-                        
-                        fig.update_layout(
-                            mapbox_style="carto-positron",
-                            mapbox=dict(
-                                zoom=guess_zoom_from_bounds(gps_df),
-                                center=dict(
-                                    lat=gps_df["lat"].mean(),
-                                    lon=gps_df["lon"].mean(),
+                        else:
+                            osm_map = build_osm_map(
+                                gps_df,
+                                st.session_state.start_idx,
+                                st.session_state.end_idx,
+                                km_df,
+                            )
+                            st_folium(
+                                osm_map,
+                                height=600,
+                                use_container_width=True,
+                                returned_objects=[],
+                                key=(
+                                    f"osm_map_{sel_id}_"
+                                    f"{st.session_state.start_idx}_"
+                                    f"{st.session_state.end_idx}"
                                 ),
-                            ),
-                            hovermode="closest",
-                            margin={"r": 0, "t": 0, "l": 0, "b": 0},
-                            height=600,
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
+                            )
                         
                         # Calculate and display segment metrics
                         st.subheader("📊 Segment Metrics")

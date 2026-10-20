@@ -18,3 +18,7 @@ cloudscraper
 # Optional: browser automation fallback for JS-based challenges
 selenium
 webdriver-manager
+
+# Route map: OpenStreetMap via Leaflet (no Google/Mapbox API key needed)
+folium
+streamlit-folium
