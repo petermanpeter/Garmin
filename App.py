@@ -260,6 +260,15 @@ def build_osm_map(gps_df, start_idx, end_idx, km_df=None):
     - Layer switcher: OpenStreetMap (default) or CartoDB light
       (both render OpenStreetMap data; no API key for either)
     """
+    # Defensive clamp: indices come from session-state sliders and can
+    # be stale for this track (e.g. set on a longer run). Without this,
+    # gps_df.iloc[start_idx] below raises
+    # IndexError: single positional indexer is out-of-bounds.
+    # Convention: end_idx is exclusive, in [start_idx + 1, len(gps_df)].
+    n_points = len(gps_df)
+    start_idx = int(min(max(0, start_idx), max(0, n_points - 1)))
+    end_idx = int(min(max(start_idx + 1, end_idx), n_points))
+
     center = [gps_df["lat"].mean(), gps_df["lon"].mean()]
     m = _base_osm_map(center, guess_zoom_from_bounds(gps_df))
 
@@ -866,33 +875,64 @@ with GC_tab4: #Specific Run - Enhanced with Route Selection
                         gps_df["elevation"] = elevations
                         gps_df["timestamp"] = times
                         
-                        # Initialize session state for point selection
-                        if "start_idx" not in st.session_state:
+                        # Segment selection state. start_idx / end_idx
+                        # live in session state, so they survive across
+                        # runs: indices picked on a LONG run are out of
+                        # range for a SHORTER one and crashed the map
+                        # with IndexError ('single positional indexer
+                        # is out-of-bounds'). Fix: reset the segment
+                        # whenever the selected run changes, and clamp
+                        # both indices (and the slider widget values)
+                        # to THIS run's range before drawing anything.
+                        # Convention: end_idx is exclusive, so the
+                        # default full segment is start=0, end=len.
+                        n_points = len(gps_df)
+                        if st.session_state.get("segment_run_id") != sel_id:
+                            st.session_state.segment_run_id = sel_id
                             st.session_state.start_idx = 0
-                        if "end_idx" not in st.session_state:
-                            st.session_state.end_idx = len(gps_df) - 1
-                        
+                            st.session_state.end_idx = n_points
+                        st.session_state.start_idx = int(min(
+                            max(0, st.session_state.get("start_idx", 0)),
+                            max(0, n_points - 2),
+                        ))
+                        st.session_state.end_idx = int(min(
+                            max(st.session_state.start_idx + 1,
+                                st.session_state.get("end_idx", n_points)),
+                            n_points,
+                        ))
+                        # Keep the slider widgets in sync with the
+                        # clamped values (set before they are created).
+                        st.session_state.start_slider = st.session_state.start_idx
+                        st.session_state.end_slider = st.session_state.end_idx
+
                         # Point selection controls
                         st.subheader("📍 Route Segment Selection")
                         col1, col2 = st.columns(2)
-                        
+
                         with col1:
                             st.session_state.start_idx = st.slider(
                                 "Start point index",
                                 0,
-                                len(gps_df) - 2,
-                                st.session_state.start_idx,
+                                max(0, n_points - 2),
                                 key="start_slider"
                             )
-                        
+
                         with col2:
+                            # End must stay ahead of the (possibly just
+                            # moved) start slider.
+                            st.session_state.end_slider = int(min(
+                                max(st.session_state.start_idx + 1,
+                                    st.session_state.end_slider),
+                                n_points,
+                            ))
                             st.session_state.end_idx = st.slider(
                                 "End point index",
                                 st.session_state.start_idx + 1,
-                                len(gps_df),
-                                st.session_state.end_idx,
+                                n_points,
                                 key="end_slider"
                             )
+                        st.session_state.start_idx = int(st.session_state.start_idx)
+                        st.session_state.end_idx = int(st.session_state.end_idx)
                         
                         # Selected segment (also used by the metrics below)
                         segment_gps = gps_df.iloc[st.session_state.start_idx:st.session_state.end_idx]

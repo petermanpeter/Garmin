@@ -1,6 +1,13 @@
 # Garmin program description
 analyze Garmin activities and weight
 
+# Update v20261020c — bug fix
+- Fixed `IndexError: single positional indexer is out-of-bounds` in
+  Specific Run: the segment start/end indices live in session state, so
+  values set on a long run crashed a shorter run. The segment now resets
+  when the selected run changes, indices are clamped to the current
+  run, and the map builder clamps defensively as well.
+
 # Update v20261020b
 - Basemap default is now truly OpenStreetMap (the CartoDB layer is only
   listed in the layer switcher, not shown first).
